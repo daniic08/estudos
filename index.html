@@ -16,7 +16,10 @@ input,select,textarea{font-family:inherit;background:var(--bg);color:var(--text)
 .pill{padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;display:inline-block;}
 .btn{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:500;display:inline-flex;align-items:center;gap:6px;}
 .btn.ghost{background:transparent;color:var(--text);border:1px solid var(--border);}
-.btn.danger{color:#ef4444;border-color:#ef4444;background:transparent;}
+.btn.danger{color:#ef4444;border-color:#ef4444;background:transparent;border:1px solid #ef4444;}
+.iconbtn{background:transparent;border:1px solid var(--border);border-radius:6px;padding:4px 7px;font-size:12px;color:var(--text);cursor:pointer;}
+.iconbtn:hover{background:var(--bg);}
+.iconbtn.danger{border-color:#ef4444;color:#ef4444;}
 .subtab{padding:7px 14px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:12.5px;margin-right:6px;}
 .subtab.active{background:var(--accent);color:#fff;border-color:var(--accent);}
 .postit{border-radius:8px;padding:14px;min-height:130px;position:relative;box-shadow:0 4px 10px rgba(0,0,0,.15);font-size:13px;}
@@ -37,19 +40,17 @@ table.simple td{border:1px solid var(--border);padding:4px;}
 .login-input{width:100%;margin-bottom:10px;background:#0a0e14;color:#e6e8eb;border:1px solid #1f2630;border-radius:8px;padding:10px 12px;font-size:13px;box-sizing:border-box;}
 .userpick{background:#0a0e14;color:#e6e8eb;border:1px solid #1f2630;border-radius:10px;padding:12px 14px;font-size:13px;text-align:left;cursor:pointer;display:flex;justify-content:space-between;align-items:center;width:100%;margin-bottom:10px;}
 .colordot{width:18px;height:18px;border-radius:50%;border:1px solid var(--border);cursor:pointer;}
+.checkrow{display:flex;align-items:center;gap:8px;padding:5px 0;}
+.checkrow input[type=checkbox]{width:16px;height:16px;}
+.checkrow.done span{text-decoration:line-through;color:var(--muted);}
+.editbox{border:1px dashed var(--accent);border-radius:10px;padding:12px;background:var(--bg);}
 </style>
 </head>
 <body>
 <div id="app"></div>
 
 <script>
-/* ============================================================
-   VERSÃO OFFLINE — usa localStorage do navegador.
-   Feita para ser baixada e aberta diretamente no seu navegador
-   (fora do Claude.ai). Os dados ficam salvos neste navegador,
-   neste computador. Não use em modo anônimo/privado, ou os
-   dados serão perdidos ao fechar a aba.
-   ============================================================ */
+/* VERSÃO OFFLINE — usa localStorage. Sem prompt()/confirm()/alert() (bloqueados em iframes sandboxed). */
 const storage = {
   async get(key){ try{ const v=localStorage.getItem(key); return v!==null? {key,value:v} : null; }catch(e){ return null; } },
   async set(key,value){ try{ localStorage.setItem(key,value); return {key,value}; }catch(e){ return null; } }
@@ -57,7 +58,7 @@ const storage = {
 
 /* ============ CONST / UTIL ============ */
 const AUTH_KEY = "cockpit_html_auth_v1";
-const STORAGE_PREFIX = "cockpit_html_state_v1_";
+const STORAGE_PREFIX = "cockpit_html_state_v3_";
 const PESO_W = {Alta:3,"Média":2,Baixa:1};
 const TIPOS = ["teoria","questões","revisão","lei seca","jurisprudência","simulado","discursiva"];
 const REV_INTERVALS = [{d:1,label:"24h"},{d:7,label:"7d"},{d:30,label:"30d"},{d:90,label:"90d"}];
@@ -126,7 +127,7 @@ function defaultState(){ return {
   horasSemanais:20,
   concursos:[buildPGE(),buildTRF()],
   registros:[],ciclo:[],revisoes:[],
-  metas:[{id:uid(),titulo:"Meta semanal geral",metaHoras:20}],
+  metas:[{id:uid(),titulo:"Meta semanal geral",metaHoras:20,periodo:"semanal",tasks:[]}],
   questoes:[],simulados:[],discursivas:[],jurisprudencia:[],legislacao:[],
   cadernos:[],postits:[],flashcards:[],
 };}
@@ -135,8 +136,9 @@ function defaultState(){ return {
 let AUTH=null, S=null, CUR_USER=null;
 let UI={section:"dashboard", openConcurso:{}, openDisc:{}, openCaderno:null, openPostit:null,
         questoesTab:"questoes", jurisTab:"jurisprudencia", notesTab:"cadernos", mapaConcurso:null,
-        fcFilter:"", fcReview:null, timerRunning:false, timerStart:0, timerElapsed:0,
-        timerSel:{concursoId:"",disciplinaId:"",assuntoId:"",tipo:"teoria"}, loginSelectedUser:null};
+        fcFilter:"", fcReview:null, timerRunning:false, timerElapsed:0,
+        timerSel:{concursoId:"",disciplinaId:"",assuntoId:"",tipo:"teoria"}, loginSelectedUser:null,
+        editing:null, confirmDelete:null, metasTab:"semanal", accountEditing:false};
 let timerInterval=null;
 let saveTimeout=null;
 
@@ -151,11 +153,13 @@ async function loadState(){
     const r=await storage.get(storageKey());
     S = (r&&r.value)? Object.assign(defaultState(), JSON.parse(r.value)) : defaultState();
     if(!S.theme) S.theme=defaultState().theme;
+    S.metas.forEach(m=>{ if(!m.tasks) m.tasks=[]; if(!m.periodo) m.periodo="semanal"; });
   }catch(e){ S=defaultState(); }
 }
 function scheduleSave(){ if(saveTimeout) clearTimeout(saveTimeout); saveTimeout=setTimeout(()=>{ storage.set(storageKey(),JSON.stringify(S)).catch(()=>{}); },350); }
 function mutate(fn){ const r=fn(S); render(); scheduleSave(); return r; }
 function mutateSilent(fn){ fn(S); scheduleSave(); }
+function closeEdit(){ UI.editing=null; }
 
 /* ============ HELPERS ============ */
 function findConcurso(id){ return S.concursos.find(c=>c.id===id); }
@@ -174,15 +178,68 @@ function applyTheme(){
   r.setProperty("--accent", S.theme.accent);
   document.body.style.background="var(--bg)"; document.body.style.color="var(--text)";
 }
-
-function selectOptions(arr,getId,getLabel,selected){
-  return arr.map(x=>`<option value="${esc(getId(x))}" ${getId(x)===selected?"selected":""}>${esc(getLabel(x))}</option>`).join("");
-}
+function selectOptions(arr,getId,getLabel,selected){ return arr.map(x=>`<option value="${esc(getId(x))}" ${getId(x)===selected?"selected":""}>${esc(getLabel(x))}</option>`).join(""); }
 function concursoOptions(selected){ return `<option value="">Concurso...</option>`+selectOptions(S.concursos,c=>c.id,c=>c.nome,selected); }
 function discOptions(concursoId,selected){ const c=findConcurso(concursoId); if(!c) return `<option value="">Disciplina...</option>`; return `<option value="">Disciplina...</option>`+selectOptions(c.disciplinas,d=>d.id,d=>d.nome,selected); }
-function assuntoOptions(concursoId,discId,selected){ const d=findDisc(concursoId,discId); if(!d) return `<option value="">Tópico...</option>`; return `<option value="">Tópico...</option>`+selectOptions(d.assuntos,a=>a.id,a=>a.nome,selected); }
+function assuntoOptions(concursoId,discId,selected){ const d=findDisc(concursoId,discId); if(!d) return `<option value="">Tópico (opcional)...</option>`; return `<option value="">Tópico (opcional)...</option>`+selectOptions(d.assuntos,a=>a.id,a=>a.nome,selected); }
 
-/* ============ ALGORITMOS ============ */
+/* ============ BOTÕES DE EDITAR/EXCLUIR (sem prompt/confirm) ============ */
+function editBtn(key){ return `<button class="iconbtn" data-act="toggle-edit" data-key="${key}">✏️</button>`; }
+function delBtn(key){
+  if(UI.confirmDelete===key) return `<button class="iconbtn danger" data-act="confirm-del" data-key="${key}">✔ Confirmar</button><button class="iconbtn" data-act="cancel-del">✕</button>`;
+  return `<button class="iconbtn" data-act="arm-del" data-key="${key}">🗑</button>`;
+}
+function performDelete(key){
+  const p=key.split(":"); const type=p[0];
+  if(type==="concurso") deleteConcursoNow(p[1]);
+  else if(type==="disc") deleteDisciplinaNow(p[1],p[2]);
+  else if(type==="assunto") deleteAssuntoNow(p[1],p[2],p[3]);
+  else if(type==="registro") deleteRegistroNow(p[1]);
+  else if(type==="ciclo") mutate(()=>{ S.ciclo=S.ciclo.filter(x=>x.id!==p[1]); });
+  else if(type==="questao") mutate(()=>{ S.questoes=S.questoes.filter(x=>x.id!==p[1]); });
+  else if(type==="simulado") mutate(()=>{ S.simulados=S.simulados.filter(x=>x.id!==p[1]); });
+  else if(type==="discursiva") mutate(()=>{ S.discursivas=S.discursivas.filter(x=>x.id!==p[1]); });
+  else if(type==="juris") mutate(()=>{ S.jurisprudencia=S.jurisprudencia.filter(x=>x.id!==p[1]); });
+  else if(type==="leg") mutate(()=>{ S.legislacao=S.legislacao.filter(x=>x.id!==p[1]); });
+  else if(type==="flashcard") mutate(()=>{ S.flashcards=S.flashcards.filter(x=>x.id!==p[1]); });
+  else if(type==="caderno") mutate(()=>{ S.cadernos=S.cadernos.filter(x=>x.id!==p[1]); });
+  else if(type==="postit") mutate(()=>{ S.postits=S.postits.filter(x=>x.id!==p[1]); });
+  else if(type==="meta") mutate(()=>{ S.metas=S.metas.filter(x=>x.id!==p[1]); });
+  else if(type==="task") mutate(()=>{ const m=S.metas.find(x=>x.id===p[1]); if(m) m.tasks=(m.tasks||[]).filter(x=>x.id!==p[2]); });
+}
+
+/* ============ SYNC: CICLO <-> TEMPO ============ */
+function garantirCicloItem(concursoId,disciplinaId){
+  const cc=findConcurso(concursoId); if(!cc) return null;
+  const d=cc.disciplinas.find(x=>x.id===disciplinaId); if(!d) return null;
+  let ci=S.ciclo.find(c=>c.concursoId===concursoId&&c.disciplinaId===disciplinaId);
+  if(ci) return ci;
+  const existing=S.ciclo.filter(c=>c.concursoId===concursoId);
+  const idsAtuais=existing.map(c=>c.disciplinaId);
+  const HORAS=(S.horasSemanais||20)*60;
+  const totalW=[...idsAtuais,disciplinaId].reduce((s,id)=>{ const dd=cc.disciplinas.find(x=>x.id===id); return s+(dd?PESO_W[dd.peso]:0); },0);
+  existing.forEach(c=>{ const dd=cc.disciplinas.find(x=>x.id===c.disciplinaId); if(dd&&totalW>0) c.tempoPrevisto=Math.round((PESO_W[dd.peso]/totalW)*HORAS); });
+  const ordem=existing.length+1;
+  ci={id:uid(),concursoId,disciplinaId,ordem,tempoPrevisto: totalW>0? Math.round((PESO_W[d.peso]/totalW)*HORAS): HORAS,tempoExecutado:0,status:"não iniciado"};
+  S.ciclo.push(ci);
+  return ci;
+}
+function applyCicloDelta(concursoId,disciplinaId,deltaMin){
+  if(!concursoId||!disciplinaId||!deltaMin) return;
+  let ci = deltaMin>0 ? garantirCicloItem(concursoId,disciplinaId) : S.ciclo.find(c=>c.concursoId===concursoId&&c.disciplinaId===disciplinaId);
+  if(!ci) return;
+  ci.tempoExecutado=Math.max(0,(ci.tempoExecutado||0)+deltaMin);
+  ci.status = ci.tempoExecutado<=0 ? "não iniciado" : ci.tempoExecutado>=ci.tempoPrevisto ? "concluído" : "em andamento";
+}
+function applyEstudoEffects(sel,durSec){
+  applyCicloDelta(sel.concursoId,sel.disciplinaId,Math.round(durSec/60));
+  if(sel.tipo==="teoria"&&sel.assuntoId){
+    const exists=S.revisoes.find(r=>r.assuntoId===sel.assuntoId&&r.status!=="concluída"&&r.intervaloIdx===0);
+    if(!exists) S.revisoes.push({id:uid(),concursoId:sel.concursoId,disciplinaId:sel.disciplinaId,assuntoId:sel.assuntoId,intervaloIdx:0,dataPrevista:todayISO(REV_INTERVALS[0].d),status:"pendente"});
+  }
+}
+
+/* ============ ALGORITMOS DE CICLO ============ */
 function gerarCiclo(concursoId){
   const c=findConcurso(concursoId); if(!c) return;
   const ord=[...c.disciplinas].sort((a,b)=>PESO_W[b.peso]-PESO_W[a.peso]);
@@ -245,6 +302,39 @@ function calcDisciplinaScore(concursoId,discId){
   return {editalPct,accPct,discPct,revPend,score};
 }
 
+/* ============ CONCURSOS / DISCIPLINAS / ASSUNTOS — exclusão real (sem confirm) ============ */
+function deleteConcursoNow(concursoId){
+  S.concursos=S.concursos.filter(c=>c.id!==concursoId);
+  const rm=x=>x.concursoId!==concursoId;
+  S.ciclo=S.ciclo.filter(rm); S.registros=S.registros.filter(rm); S.revisoes=S.revisoes.filter(rm);
+  S.questoes=S.questoes.filter(rm); S.simulados=S.simulados.filter(rm); S.discursivas=S.discursivas.filter(rm);
+  S.jurisprudencia=S.jurisprudencia.filter(rm); S.legislacao=S.legislacao.filter(rm); S.flashcards=S.flashcards.filter(rm);
+  UI.confirmDelete=null; render(); scheduleSave();
+}
+function deleteDisciplinaNow(concursoId,discId){
+  const cc=findConcurso(concursoId); if(cc) cc.disciplinas=cc.disciplinas.filter(d=>d.id!==discId);
+  const rm=x=>!(x.concursoId===concursoId&&x.disciplinaId===discId);
+  S.ciclo=S.ciclo.filter(rm); S.registros=S.registros.filter(rm); S.revisoes=S.revisoes.filter(rm);
+  S.questoes=S.questoes.filter(rm); S.simulados=S.simulados.filter(rm); S.discursivas=S.discursivas.filter(rm);
+  S.jurisprudencia=S.jurisprudencia.filter(rm); S.legislacao=S.legislacao.filter(rm); S.flashcards=S.flashcards.filter(rm);
+  UI.confirmDelete=null; render(); scheduleSave();
+}
+function deleteAssuntoNow(concursoId,discId,assuntoId){
+  const d=findDisc(concursoId,discId); if(d) d.assuntos=d.assuntos.filter(a=>a.id!==assuntoId);
+  S.revisoes=S.revisoes.filter(r=>r.assuntoId!==assuntoId);
+  S.flashcards=S.flashcards.filter(f=>f.assuntoId!==assuntoId);
+  S.registros.forEach(r=>{ if(r.assuntoId===assuntoId) r.assuntoId=null; });
+  S.questoes.forEach(q=>{ if(q.assuntoId===assuntoId) q.assuntoId=null; });
+  S.discursivas.forEach(ds=>{ if(ds.assuntoId===assuntoId) ds.assuntoId=null; });
+  UI.confirmDelete=null; render(); scheduleSave();
+}
+function deleteRegistroNow(id){
+  const r=S.registros.find(x=>x.id===id); if(!r) return;
+  applyCicloDelta(r.concursoId,r.disciplinaId,-Math.round(r.duracao/60));
+  S.registros=S.registros.filter(x=>x.id!==id);
+  UI.confirmDelete=null; render(); scheduleSave();
+}
+
 /* ============ NAV ============ */
 const NAV=[
   {id:"dashboard",label:"Dashboard",icon:"📊"},
@@ -252,6 +342,7 @@ const NAV=[
   {id:"conteudo",label:"Adicionar Matéria/Assunto",icon:"➕"},
   {id:"ciclo",label:"Ciclo de Estudos",icon:"🔁"},
   {id:"timer",label:"Timer",icon:"⏱️"},
+  {id:"tempo",label:"Registro Manual de Tempo",icon:"⏰"},
   {id:"revisoes",label:"Revisões",icon:"🔄"},
   {id:"questoes",label:"Questões & Simulados",icon:"✅"},
   {id:"juris",label:"Jurisprudência & Lei",icon:"⚖️"},
@@ -275,7 +366,9 @@ function renderLogin(){
       ${!sel.senha? `<input class="login-input" type="password" id="login-pwd2" placeholder="Confirme a senha">`:""}
       <div id="login-err" style="color:#ef4444;font-size:12px;margin-bottom:10px;"></div>
       <button class="btn" style="width:100%;justify-content:center;margin-bottom:10px;" data-act="login-submit">${sel.senha?"Entrar":"Criar senha e entrar"}</button>
-      ${sel.senha? `<button style="display:block;width:100%;background:transparent;border:none;color:#7d8590;font-size:11.5px;cursor:pointer;text-decoration:underline;margin-bottom:8px;" data-act="login-forgot" data-id="${sel.id}">Esqueci minha senha</button>`:""}
+      ${sel.senha? (UI.confirmDelete==="forgot:"+sel.id?
+        `<div class="row" style="justify-content:center;margin-bottom:8px;"><span style="font-size:11px;color:#ef4444;">Apagar senha?</span><button class="iconbtn danger" data-act="confirm-forgot" data-id="${sel.id}">Sim</button><button class="iconbtn" data-act="cancel-del">Não</button></div>`
+        :`<button style="display:block;width:100%;background:transparent;border:none;color:#7d8590;font-size:11.5px;cursor:pointer;text-decoration:underline;margin-bottom:8px;" data-act="arm-forgot" data-id="${sel.id}">Esqueci minha senha</button>`):""}
       <button style="background:transparent;border:none;color:#7d8590;font-size:11.5px;cursor:pointer;text-decoration:underline;" data-act="login-back">Voltar</button>`;
   }
   app.innerHTML = `<div class="center-screen"><div class="login-box">
@@ -286,13 +379,11 @@ function renderLogin(){
   </div></div>`;
 }
 function loginAction(act,el){
-  if(act==="login-pick"){ UI.loginSelectedUser=el.dataset.id; renderLogin(); }
+  if(act==="login-pick"){ UI.loginSelectedUser=el.dataset.id; UI.confirmDelete=null; renderLogin(); }
   else if(act==="login-back"){ UI.loginSelectedUser=null; renderLogin(); }
-  else if(act==="login-forgot"){
-    if(confirm("Isso vai apagar a senha atual. Os dados de estudo NÃO serão apagados. Continuar?")){
-      const u=AUTH.users.find(x=>x.id===el.dataset.id); u.senha=null; saveAuth(); renderLogin();
-    }
-  }
+  else if(act==="arm-forgot"){ UI.confirmDelete="forgot:"+el.dataset.id; renderLogin(); }
+  else if(act==="cancel-del"){ UI.confirmDelete=null; renderLogin(); }
+  else if(act==="confirm-forgot"){ const u=AUTH.users.find(x=>x.id===el.dataset.id); u.senha=null; UI.confirmDelete=null; saveAuth(); renderLogin(); }
   else if(act==="login-submit"){
     const sel=AUTH.users.find(u=>u.id===UI.loginSelectedUser);
     const pwd=document.getElementById("login-pwd").value;
@@ -308,12 +399,7 @@ function loginAction(act,el){
     }
   }
 }
-async function startSession(userId){
-  CUR_USER=userId;
-  await loadState();
-  applyTheme();
-  render();
-}
+async function startSession(userId){ CUR_USER=userId; await loadState(); applyTheme(); render(); }
 
 /* ============ RENDER: MAIN APP ============ */
 function statCard(label,value){ return `<div class="card"><div style="font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px;">${label}</div><div style="font-size:24px;font-weight:700;color:var(--accent);">${value}</div></div>`; }
@@ -345,9 +431,44 @@ function secsMonth(){ return S.registros.filter(r=>r.ts.slice(0,7)===todayISO().
 function renderSection(){
   const c=document.getElementById("content");
   const fns={dashboard:renderDashboard, concursos:renderConcursos, conteudo:renderConteudo, ciclo:renderCiclo, timer:renderTimer,
-    revisoes:renderRevisoes, questoes:renderQuestoes, juris:renderJuris, mapa:renderMapa, notas:renderNotas, metas:renderMetas, config:renderConfig};
+    tempo:renderTempoManual, revisoes:renderRevisoes, questoes:renderQuestoes, juris:renderJuris, mapa:renderMapa, notas:renderNotas, metas:renderMetas, config:renderConfig};
   c.innerHTML = (fns[UI.section]||renderDashboard)();
   if(UI.section==="timer"){ updateTimerDisplay(); }
+}
+
+/* ---- registros (lista reaproveitada) ---- */
+function renderRegistroItem(r){
+  const key="registro:"+r.id;
+  if(UI.editing===key){
+    return `<div class="editbox" style="margin-bottom:8px;">
+      <div class="row">
+        <select id="er-concurso-${r.id}" data-act="er-concurso-change" data-id="${r.id}">${concursoOptions(r.concursoId)}</select>
+        <select id="er-disc-${r.id}">${discOptions(r.concursoId,r.disciplinaId)}</select>
+        <select id="er-assunto-${r.id}">${assuntoOptions(r.concursoId,r.disciplinaId,r.assuntoId)}</select>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <select id="er-tipo-${r.id}">${TIPOS.map(t=>`<option value="${t}" ${t===r.tipo?"selected":""}>${t}</option>`).join("")}</select>
+        <input type="date" id="er-data-${r.id}" value="${r.ts.slice(0,10)}">
+        <input type="number" id="er-min-${r.id}" value="${Math.round(r.duracao/60)}" style="width:90px;"> min
+        <button class="btn" data-act="save-registro" data-id="${r.id}">💾 Salvar</button>
+        <button class="btn ghost" data-act="toggle-edit" data-key="${key}">Cancelar</button>
+      </div>
+    </div>`;
+  }
+  const {c,d,a}=findAssunto(r.concursoId,r.disciplinaId,r.assuntoId);
+  return `<div class="card row" style="justify-content:space-between;padding:10px;">
+    <div style="font-size:12.5px;">${esc(d?.nome)} ${a?`· ${esc(a.nome)}`:""} <span style="color:var(--muted);">(${r.tipo}) · ${r.ts.slice(0,10)}</span></div>
+    <div class="row"><span style="font-size:12px;font-weight:600;color:var(--accent);">${fmtDur(r.duracao)}</span>${editBtn(key)}${delBtn(key)}</div></div>`;
+}
+function saveRegistro(id){
+  const r=S.registros.find(x=>x.id===id); if(!r) return;
+  const cid=document.getElementById("er-concurso-"+id).value, did=document.getElementById("er-disc-"+id).value, aid=document.getElementById("er-assunto-"+id).value||null;
+  const tipo=document.getElementById("er-tipo-"+id).value, data=document.getElementById("er-data-"+id).value, min=Math.max(1,Number(document.getElementById("er-min-"+id).value)||1);
+  const oldMin=Math.round(r.duracao/60);
+  if(cid===r.concursoId && did===r.disciplinaId){ applyCicloDelta(cid,did,min-oldMin); }
+  else { applyCicloDelta(r.concursoId,r.disciplinaId,-oldMin); applyCicloDelta(cid,did,min); }
+  r.concursoId=cid; r.disciplinaId=did; r.assuntoId=aid; r.tipo=tipo; r.duracao=min*60; r.ts=data+"T12:00:00.000Z";
+  UI.editing=null; render(); scheduleSave();
 }
 
 /* ---- Dashboard ---- */
@@ -356,18 +477,24 @@ function renderDashboard(){
   const weekData=last7.map(iso=>{ const secs=S.registros.filter(r=>r.ts.slice(0,10)===iso).reduce((s,r)=>s+r.duracao,0); return {day:dayLabel(iso),min:Math.round(secs/60)}; });
   const maxMin=Math.max(1,...weekData.map(w=>w.min));
   const proximas=S.revisoes.filter(r=>r.status==="pendente").sort((a,b)=>a.dataPrevista.localeCompare(b.dataPrevista)).slice(0,6);
-  const dueHoje=S.flashcards.filter(f=>f.proximaRevisao<=todayISO()).length;
+  const tarefasPend=S.metas.reduce((s,m)=>s+(m.tasks||[]).filter(t=>!t.done).length,0);
   const ciclo=S.ciclo.map(ci=>{ const d=findDisc(ci.concursoId,ci.disciplinaId); return {nome:(d?.nome||"?").slice(0,28), pct: ci.tempoPrevisto? Math.min(100,Math.round((ci.tempoExecutado/ci.tempoPrevisto)*100)):0}; });
   const last30=Array.from({length:30},(_,i)=>todayISO(i-29));
   const heat=last30.map(iso=>{ const secs=S.registros.filter(r=>r.ts.slice(0,10)===iso).reduce((s,r)=>s+r.duracao,0); return {iso,min:Math.round(secs/60)}; });
   const maxHeat=Math.max(1,...heat.map(h=>h.min));
 
   return `<h2>Dashboard Executivo</h2>
+  <div class="row" style="margin-bottom:18px;">
+    <button class="btn" data-act="nav" data-section="tempo">⏰ Registrar tempo</button>
+    <button class="btn ghost" data-act="nav" data-section="questoes">✅ Registrar questões</button>
+    <button class="btn ghost" data-act="nav" data-section="notas">📚 Flashcards/Cadernos</button>
+    <button class="btn ghost" data-act="nav" data-section="metas">🎯 Metas</button>
+  </div>
   <div class="grid4" style="margin-bottom:20px;">
     ${statCard("Hoje",fmtDur(secsToday()))}
     ${statCard("Esta semana",fmtDur(secsWeek()))}
     ${statCard("Este mês",fmtDur(secsMonth()))}
-    ${statCard("Flashcards p/ hoje",dueHoje)}
+    ${statCard("Tarefas pendentes",tarefasPend)}
   </div>
   <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:14px;">
     <div class="card">
@@ -380,16 +507,16 @@ function renderDashboard(){
       </div>
     </div>
     <div class="card">
-      <h4 class="label">PRÓXIMAS REVISÕES</h4>
+      <div class="row" style="justify-content:space-between;margin-bottom:10px;"><h4 class="label" style="margin:0;">PRÓXIMAS REVISÕES</h4><button class="iconbtn" data-act="nav" data-section="revisoes">Ver todas</button></div>
       ${proximas.length===0?`<div style="color:var(--muted);font-size:13px;">Nenhuma revisão pendente.</div>`:
         proximas.map(r=>{ const {c,d,a}=findAssunto(r.concursoId,r.disciplinaId,r.assuntoId); const label=r.origem==="desempenho"?d?.nome:(a?.nome||"?").replace(/^\d+\.\s*/,""); const sub=r.origem==="desempenho"?"baixo desempenho":d?.nome;
-          return `<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
+          return `<div class="row" style="justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
             <div><div style="font-size:13px;">${esc(label)}</div><div style="font-size:11px;color:var(--muted);">${esc(sub)}</div></div>
-            <div style="font-size:12px;color:var(--accent);font-weight:600;">${r.dataPrevista}</div></div>`; }).join("")}
+            <div class="row"><span style="font-size:12px;color:var(--accent);font-weight:600;">${r.dataPrevista}</span><button class="iconbtn" data-act="concluir-revisao" data-id="${r.id}">✔</button></div></div>`; }).join("")}
     </div>
   </div>
   <div class="card" style="margin-top:14px;">
-    <h4 class="label">PROGRESSO DO CICLO POR DISCIPLINA</h4>
+    <div class="row" style="justify-content:space-between;margin-bottom:10px;"><h4 class="label" style="margin:0;">PROGRESSO DO CICLO POR DISCIPLINA</h4><button class="iconbtn" data-act="nav" data-section="ciclo">Editar ciclo</button></div>
     ${ciclo.length===0?`<div style="color:var(--muted);font-size:13px;">Gere um ciclo de estudos para ver o progresso aqui.</div>`:
       ciclo.map(d=>`<div style="margin-bottom:10px;"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span>${esc(d.nome)}</span><span style="color:var(--muted);">${d.pct}%</span></div><div class="barwrap"><div class="barfill" style="width:${d.pct}%;"></div></div></div>`).join("")}
   </div>
@@ -401,72 +528,98 @@ function renderDashboard(){
   </div>`;
 }
 
-/* ---- Concursos ---- */
+/* ---- Concursos (CRUD completo: concurso, disciplina, assunto) ---- */
 function renderConcursos(){
   return `<h2>Concursos & Edital</h2>
-  ${S.concursos.map(c=>`
+  <div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Adicione, edite ou exclua o concurso/edital, suas disciplinas e assuntos. Clique em 🗑 e depois em "Confirmar" para excluir.</div>
+  ${S.concursos.map(c=>{
+    const ckey="concurso:"+c.id;
+    if(UI.editing===ckey){
+      return `<div class="card editbox">
+        <div class="row">
+          <input id="ec-nome-${c.id}" value="${esc(c.nome)}" style="flex:1;" placeholder="Nome do concurso">
+          <input type="color" id="ec-cor-${c.id}" value="${c.cor}" style="width:36px;height:32px;padding:0;">
+          <button class="btn" data-act="save-concurso" data-id="${c.id}">💾 Salvar</button>
+          <button class="btn ghost" data-act="toggle-edit" data-key="${ckey}">Cancelar</button>
+        </div>
+      </div>`;
+    }
+    return `
     <div class="card">
-      <div class="row" style="justify-content:space-between;cursor:pointer;" data-act="toggle-concurso" data-id="${c.id}">
-        <div class="row"><span>${UI.openConcurso[c.id]?"▾":"▸"}</span><span style="width:10px;height:10px;border-radius:5px;background:${c.cor};display:inline-block;"></span><strong>${esc(c.nome)}</strong><span style="color:var(--muted);font-size:12px;">· ${c.disciplinas.length} disciplinas</span></div>
-        <button class="btn ghost" data-act="gerar-ciclo" data-id="${c.id}">🔁 Gerar ciclo (5 matérias)</button>
+      <div class="row" style="justify-content:space-between;">
+        <div class="row" style="cursor:pointer;" data-act="toggle-concurso" data-id="${c.id}"><span>${UI.openConcurso[c.id]?"▾":"▸"}</span><span style="width:10px;height:10px;border-radius:5px;background:${c.cor};display:inline-block;"></span><strong>${esc(c.nome)}</strong><span style="color:var(--muted);font-size:12px;">· ${c.disciplinas.length} disciplinas</span></div>
+        <div class="row">
+          <button class="btn ghost" data-act="gerar-ciclo" data-id="${c.id}">🔁 Gerar ciclo (5 matérias)</button>
+          ${editBtn(ckey)}${delBtn(ckey)}
+        </div>
       </div>
-      ${UI.openConcurso[c.id]? c.disciplinas.map(d=>`
+      ${UI.openConcurso[c.id]? c.disciplinas.map(d=>{
+        const dkey="disc:"+c.id+":"+d.id;
+        if(UI.editing===dkey){
+          return `<div class="editbox" style="margin-top:8px;">
+            <div class="row">
+              <input id="ed-nome-${d.id}" value="${esc(d.nome)}" style="flex:1;">
+              <select id="ed-peso-${d.id}"><option value="Alta" ${d.peso==="Alta"?"selected":""}>Alta</option><option value="Média" ${d.peso==="Média"?"selected":""}>Média</option><option value="Baixa" ${d.peso==="Baixa"?"selected":""}>Baixa</option></select>
+              <button class="btn" data-act="save-disc" data-cid="${c.id}" data-did="${d.id}">💾 Salvar</button>
+              <button class="btn ghost" data-act="toggle-edit" data-key="${dkey}">Cancelar</button>
+            </div>
+          </div>`;
+        }
+        return `
         <div style="border-top:1px solid var(--border);padding-top:8px;margin-top:8px;">
-          <div class="row" style="justify-content:space-between;cursor:pointer;" data-act="toggle-disc" data-id="${d.id}">
-            <div class="row"><span>${UI.openDisc[d.id]?"▾":"▸"}</span><span style="font-size:13px;">${esc(d.nome)}</span><span style="font-size:11px;color:var(--muted);">(${d.assuntos.length} tópicos)</span>${d.custom?`<span class="pill" style="background:var(--accent)22;color:var(--accent);">personalizado</span>`:""}</div>
-            <span class="pill" style="background:${pesoBg(d.peso)};color:${pesoColor(d.peso)};">${d.peso}</span>
+          <div class="row" style="justify-content:space-between;">
+            <div class="row" style="cursor:pointer;" data-act="toggle-disc" data-id="${d.id}"><span>${UI.openDisc[d.id]?"▾":"▸"}</span><span style="font-size:13px;">${esc(d.nome)}</span><span style="font-size:11px;color:var(--muted);">(${d.assuntos.length} tópicos)</span>${d.custom?`<span class="pill" style="background:var(--accent)22;color:var(--accent);">personalizado</span>`:""}</div>
+            <div class="row"><span class="pill" style="background:${pesoBg(d.peso)};color:${pesoColor(d.peso)};">${d.peso}</span>${editBtn(dkey)}${delBtn(dkey)}</div>
           </div>
-          ${UI.openDisc[d.id]? `<div style="padding-left:22px;margin-top:6px;">${d.assuntos.map(a=>`<div style="font-size:12.5px;color:var(--muted);">${esc(a.nome)}${a.custom?` <span class="pill" style="background:var(--accent)22;color:var(--accent);">novo</span>`:""}</div>`).join("")}</div>`:""}
-        </div>`).join("") : ""}
-    </div>`).join("")}
+          ${UI.openDisc[d.id]? `<div style="padding-left:22px;margin-top:6px;display:grid;gap:4px;">${d.assuntos.map(a=>{
+            const akey="assunto:"+c.id+":"+d.id+":"+a.id;
+            if(UI.editing===akey){
+              return `<div class="editbox row"><input id="ea-nome-${a.id}" value="${esc(a.nome)}" style="flex:1;"><button class="btn" data-act="save-assunto" data-cid="${c.id}" data-did="${d.id}" data-aid="${a.id}">💾</button><button class="btn ghost" data-act="toggle-edit" data-key="${akey}">✕</button></div>`;
+            }
+            return `<div class="row" style="justify-content:space-between;">
+              <span style="font-size:12.5px;color:var(--muted);">${esc(a.nome)}${a.custom?` <span class="pill" style="background:var(--accent)22;color:var(--accent);">novo</span>`:""}</span>
+              <div class="row">${editBtn(akey)}${delBtn(akey)}</div>
+            </div>`; }).join("")}
+            <div class="row" style="margin-top:6px;"><input id="add-assunto-inline-${d.id}" placeholder="Novo assunto..." style="flex:1;"><button class="btn ghost" data-act="add-assunto-inline" data-cid="${c.id}" data-did="${d.id}">➕</button></div>
+          </div>`:""}
+        </div>`; }).join("") : ""}
+      ${UI.openConcurso[c.id]?`<div class="row" style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px;"><input id="add-disc-inline-${c.id}" placeholder="Nova disciplina..." style="flex:1;"><select id="add-disc-peso-${c.id}"><option value="Média" selected>Média</option><option value="Alta">Alta</option><option value="Baixa">Baixa</option></select><button class="btn ghost" data-act="add-disc-inline" data-cid="${c.id}">➕ Disciplina</button></div>`:""}
+    </div>`; }).join("")}
   <div class="card row">
-    <input id="new-concurso-nome" style="flex:1;" placeholder="Nome do novo concurso...">
-    <button class="btn" data-act="add-concurso">➕ Adicionar</button>
+    <input id="new-concurso-nome" style="flex:1;" placeholder="Nome do novo concurso/edital...">
+    <button class="btn" data-act="add-concurso">➕ Adicionar concurso</button>
   </div>`;
 }
 
-/* ---- Conteúdo (NOVO: adicionar matéria/assunto) ---- */
+/* ---- Conteúdo (adicionar matéria/assunto) ---- */
 function renderConteudo(){
   return `<h2>Adicionar Matéria / Assunto</h2>
-  <div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Use esta aba para cadastrar disciplinas e assuntos que não estão nos editais carregados — útil para conteúdo extra, cursos, livros ou tópicos próprios.</div>
-
+  <div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Cadastre disciplinas e assuntos fora dos editais carregados. Para editar/excluir, use a aba Concursos.</div>
   <div class="card">
     <h4 class="label">NOVA DISCIPLINA</h4>
     <div class="row">
-      <select id="cd-concurso" data-act="cd-concurso-change">${concursoOptions("")}</select>
+      <select id="cd-concurso">${concursoOptions("")}</select>
       <input id="cd-disc-nome" placeholder="Nome da disciplina...">
       <select id="cd-disc-peso"><option value="Alta">Peso Alta</option><option value="Média" selected>Peso Média</option><option value="Baixa">Peso Baixa</option></select>
       <button class="btn" data-act="add-disciplina">➕ Adicionar disciplina</button>
     </div>
   </div>
-
   <div class="card">
     <h4 class="label">NOVO ASSUNTO / TÓPICO</h4>
     <div class="row">
       <select id="ca-concurso" data-act="ca-concurso-change">${concursoOptions("")}</select>
-      <select id="ca-disc" data-act="ca-disc-change">${discOptions("","")}</select>
+      <select id="ca-disc">${discOptions("","")}</select>
       <input id="ca-assunto-nome" placeholder="Nome do assunto/tópico...">
       <button class="btn" data-act="add-assunto">➕ Adicionar assunto</button>
-    </div>
-  </div>
-
-  <div class="card">
-    <h4 class="label">CONTEÚDO PERSONALIZADO CADASTRADO</h4>
-    <div style="display:grid;gap:6px;">
-      ${S.concursos.flatMap(c=>c.disciplinas.filter(d=>d.custom||d.assuntos.some(a=>a.custom)).map(d=>`
-        <div style="font-size:12.5px;">
-          <strong>${esc(d.nome)}</strong> <span style="color:var(--muted);">(${esc(c.nome)})</span> ${d.custom?`<span class="pill" style="background:var(--accent)22;color:var(--accent);">disciplina nova</span>`:""}
-          ${d.assuntos.filter(a=>a.custom).map(a=>`<div style="padding-left:14px;color:var(--muted);">• ${esc(a.nome)}</div>`).join("")}
-        </div>`)).join("") || `<div style="color:var(--muted);font-size:13px;">Nenhum conteúdo personalizado ainda.</div>`}
     </div>
   </div>`;
 }
 
-/* ---- Ciclo ---- */
+/* ---- Ciclo (com edição inline direta) ---- */
 function renderCiclo(){
   const concursoId=document.getElementById("ciclo-add-concurso")?.value || "";
   return `<h2>Ciclo de Estudos</h2>
-  <div style="font-size:12px;color:var(--muted);margin-bottom:14px;">O 1º ciclo gerado inclui as 5 disciplinas de maior peso. Adicione as demais manualmente abaixo, quando quiser.</div>
+  <div style="font-size:12px;color:var(--muted);margin-bottom:14px;">O 1º ciclo gerado inclui as 5 disciplinas de maior peso. Edite os minutos diretamente nos campos abaixo — é salvo automaticamente.</div>
   <div class="card row">
     <select id="ciclo-add-concurso" data-act="ciclo-concurso-change">${concursoOptions(concursoId)}</select>
     <select id="ciclo-add-disc">${cicloDiscOptions(concursoId)}</select>
@@ -478,13 +631,19 @@ function renderCiclo(){
       const c=findConcurso(ci.concursoId), d=findDisc(ci.concursoId,ci.disciplinaId);
       const pct=ci.tempoPrevisto? Math.min(100,Math.round((ci.tempoExecutado/ci.tempoPrevisto)*100)):0;
       const color= ci.status==="concluído"?"#22c55e": ci.status==="em andamento"?"var(--accent)":"var(--muted)";
-      return `<div class="card row">
+      const key="ciclo:"+ci.id;
+      return `<div class="card">
+      <div class="row">
         <div style="width:28px;height:28px;border-radius:14px;background:${color}22;color:${color};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;">${ci.ordem}</div>
-        <div style="flex:1;"><div style="font-size:13px;font-weight:600;">${esc(d?.nome)}</div><div style="font-size:11px;color:var(--muted);">${esc(c?.nome)} · ${Math.round(ci.tempoExecutado)}min / ${ci.tempoPrevisto}min</div></div>
-        <div style="width:120px;"><div class="barwrap"><div class="barfill" style="background:${color};width:${pct}%;"></div></div></div>
+        <div style="flex:1;"><div style="font-size:13px;font-weight:600;">${esc(d?.nome)}</div><div style="font-size:11px;color:var(--muted);">${esc(c?.nome)}</div></div>
         <span class="pill" style="background:${color}22;color:${color};">${ci.status}</span>
-        <button class="btn ghost" data-act="del-ciclo" data-id="${ci.id}">🗑</button>
-      </div>`; }).join("")}
+        ${delBtn(key)}
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <span style="font-size:11px;color:var(--muted);">Previsto:</span><input type="number" data-act="ciclo-prevista" data-id="${ci.id}" value="${ci.tempoPrevisto}" style="width:80px;"><span style="font-size:11px;color:var(--muted);">min</span>
+        <span style="font-size:11px;color:var(--muted);margin-left:10px;">Executado:</span><input type="number" data-act="ciclo-executado" data-id="${ci.id}" value="${ci.tempoExecutado}" style="width:80px;"><span style="font-size:11px;color:var(--muted);">min</span>
+        <div class="barwrap" style="flex:1;min-width:80px;"><div class="barfill" style="background:${color};width:${pct}%;"></div></div>
+      </div></div>`; }).join("")}
   </div>`;
 }
 function cicloDiscOptions(concursoId){
@@ -499,6 +658,7 @@ function cicloDiscOptions(concursoId){
 function renderTimer(){
   const sel=UI.timerSel;
   return `<h2>Timer de Estudo</h2>
+  <div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Ao finalizar, o tempo é somado automaticamente à disciplina no Ciclo de Estudos (se ela não estiver no ciclo, é adicionada automaticamente).</div>
   <div class="card" style="max-width:520px;">
     <div id="timer-display" style="font-size:52px;font-weight:700;text-align:center;letter-spacing:1px;margin-bottom:18px;">00:00:00</div>
     <div style="display:grid;gap:10px;margin-bottom:16px;">
@@ -511,13 +671,13 @@ function renderTimer(){
       ${!UI.timerRunning && UI.timerElapsed===0? `<button class="btn" data-act="timer-start">▶ Iniciar</button>`:""}
       ${UI.timerRunning? `<button class="btn ghost" data-act="timer-pause">⏸ Pausar</button>`:""}
       ${!UI.timerRunning && UI.timerElapsed>0? `<button class="btn" data-act="timer-resume">▶ Retomar</button>`:""}
-      ${UI.timerElapsed>0? `<button class="btn danger" style="border:1px solid #ef4444;" data-act="timer-stop">⏹ Finalizar</button>`:""}
+      ${UI.timerElapsed>0? `<button class="btn danger" data-act="timer-stop">⏹ Finalizar e salvar</button>`:""}
     </div>
   </div>
-  <h4 class="label" style="margin-top:24px;">ÚLTIMOS REGISTROS</h4>
+  <h4 class="label" style="margin-top:24px;">ÚLTIMOS REGISTROS (editáveis)</h4>
   <div style="display:grid;gap:6px;">
-    ${S.registros.slice().reverse().slice(0,8).map(r=>{ const {d,a}=findAssunto(r.concursoId,r.disciplinaId,r.assuntoId);
-      return `<div class="card row" style="justify-content:space-between;padding:10px;"><div style="font-size:12.5px;">${esc(d?.nome)} ${a?`· ${esc(a.nome)}`:""} <span style="color:var(--muted);">(${r.tipo})</span></div><div style="font-size:12px;font-weight:600;color:var(--accent);">${fmtDur(r.duracao)}</div></div>`; }).join("")}
+    ${S.registros.slice().reverse().slice(0,8).map(renderRegistroItem).join("")}
+    ${S.registros.length===0?`<div class="card" style="color:var(--muted);">Nenhum registro ainda.</div>`:""}
   </div>`;
 }
 function updateTimerDisplay(){
@@ -526,6 +686,43 @@ function updateTimerDisplay(){
   el.textContent=t; el.style.color = UI.timerRunning? "var(--accent)" : "var(--text)";
 }
 function tickTimer(){ UI.timerElapsed++; updateTimerDisplay(); }
+
+/* ---- Registro Manual de Tempo ---- */
+function renderTempoManual(){
+  return `<h2>Registro Manual de Tempo</h2>
+  <div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Lance tempo de estudo retroativo. Sincroniza com o Ciclo de Estudos e gera revisões automaticamente, igual ao Timer.</div>
+  <div class="card">
+    <div class="row">
+      <select id="tm-concurso" data-act="tm-concurso-change">${concursoOptions("")}</select>
+      <select id="tm-disc" data-act="tm-disc-change">${discOptions("","")}</select>
+      <select id="tm-assunto">${assuntoOptions("","","")}</select>
+      <select id="tm-tipo">${TIPOS.map(t=>`<option value="${t}">${t}</option>`).join("")}</select>
+    </div>
+    <div class="row" style="margin-top:8px;">
+      <input type="date" id="tm-data" value="${todayISO()}">
+      <input type="number" id="tm-horas" placeholder="Horas" style="width:80px;" value="0" min="0">
+      <input type="number" id="tm-minutos" placeholder="Minutos" style="width:90px;" value="0" min="0" max="59">
+      <button class="btn" data-act="add-registro-manual">➕ Registrar tempo</button>
+    </div>
+  </div>
+  <h4 class="label" style="margin-top:20px;">TODOS OS REGISTROS</h4>
+  <div style="display:grid;gap:6px;">
+    ${S.registros.slice().reverse().map(renderRegistroItem).join("")}
+    ${S.registros.length===0?`<div class="card" style="color:var(--muted);">Nenhum registro ainda.</div>`:""}
+  </div>`;
+}
+function addRegistroManual(){
+  const cid=document.getElementById("tm-concurso").value, did=document.getElementById("tm-disc").value, aid=document.getElementById("tm-assunto").value||null, tipo=document.getElementById("tm-tipo").value;
+  const data=document.getElementById("tm-data").value || todayISO();
+  const horas=Number(document.getElementById("tm-horas").value)||0, minutos=Number(document.getElementById("tm-minutos").value)||0;
+  const totalMin=horas*60+minutos;
+  if(!cid||!did||totalMin<=0) return;
+  const sel={concursoId:cid,disciplinaId:did,assuntoId:aid,tipo};
+  mutate(()=>{
+    S.registros.push({id:uid(),...sel,duracao:totalMin*60,ts:data+"T12:00:00.000Z"});
+    applyEstudoEffects(sel,totalMin*60);
+  });
+}
 
 /* ---- Revisões ---- */
 function renderRevisoes(){
@@ -538,15 +735,16 @@ function renderRevisoes(){
       const isDes=r.origem==="desempenho";
       return `<div class="card row">
         <div style="flex:1;"><div style="font-size:13px;">${esc(isDes?d?.nome:a?.nome)}</div>
-        <div style="font-size:11px;color:var(--muted);">${isDes?`${esc(c?.nome)} · <span style="color:#ef4444;">baixo desempenho em questões (${r.percentual}%)</span>`:`${esc(d?.nome)} · ${esc(c?.nome)} · ciclo ${REV_INTERVALS[r.intervaloIdx]?.label}`}</div></div>
-        <span class="pill" style="background:${atrasada?'#ef444422':'var(--accent)22'};color:${atrasada?'#ef4444':'var(--accent)'};">${atrasada?"Atrasada":r.dataPrevista}</span>
+        <div style="font-size:11px;color:var(--muted);">${isDes?`${esc(c?.nome)} · <span style="color:#ef4444;">baixo desempenho em questões (${r.percentual}%)</span>`:`${esc(d?.nome)} · ${esc(c?.nome)} · ciclo ${REV_INTERVALS[r.intervaloIdx]?.label}</span>`}</div></div>
+        <input type="date" data-act="revisao-data" data-id="${r.id}" value="${r.dataPrevista}" style="width:130px;">
+        <span class="pill" style="background:${atrasada?'#ef444422':'var(--accent)22'};color:${atrasada?'#ef4444':'var(--accent)'};">${atrasada?"Atrasada":""}</span>
         <button class="btn" data-act="concluir-revisao" data-id="${r.id}">✔ Concluir</button>
       </div>`; }).join("")}
-    ${pend.length===0?`<div class="card" style="color:var(--muted);">Nenhuma revisão pendente. Finalize um estudo de "teoria" no Timer, ou registre questões com desempenho abaixo de 80%, para gerar revisões automaticamente.</div>`:""}
+    ${pend.length===0?`<div class="card" style="color:var(--muted);">Nenhuma revisão pendente.</div>`:""}
   </div>`;
 }
 
-/* ---- Questões ---- */
+/* ---- Questões / Simulados / Discursivas (edição inline real) ---- */
 function renderQuestoes(){
   const tab=UI.questoesTab;
   let body="";
@@ -562,28 +760,57 @@ function renderQuestoes(){
         return `<div class="row" style="justify-content:space-between;font-size:12.5px;"><span>${esc(d?.nome)} <span style="color:var(--muted);">(${esc(c?.nome)})</span></span><span class="pill" style="background:${baixo?'#ef444422':'#22c55e22'};color:${baixo?'#ef4444':'#22c55e'};">${g.pct}% ${baixo?"· enviado p/ revisão":""}</span></div>`; }).join("")}
       </div></div>`:""}
     <div class="card">
-      <div class="row"><select id="q-concurso" data-act="q-concurso-change">${concursoOptions("")}</select><select id="q-disc">${discOptions("","")}</select>
-      <input id="q-banca" placeholder="Banca" style="width:100px;"><input id="q-acertos" type="number" placeholder="Acertos" style="width:80px;" value="0"><input id="q-erros" type="number" placeholder="Erros" style="width:80px;" value="0">
-      <button class="btn" data-act="add-questao">➕</button></div>
+      <div class="row"><select id="q-concurso" data-act="q-concurso-change">${concursoOptions("")}</select><select id="q-disc" data-act="q-disc-change">${discOptions("","")}</select><select id="q-assunto">${assuntoOptions("","","")}</select></div>
+      <div class="row" style="margin-top:8px;"><input id="q-banca" placeholder="Banca" style="width:100px;"><input id="q-acertos" type="number" placeholder="Acertos" style="width:80px;" value="0"><input id="q-erros" type="number" placeholder="Erros" style="width:80px;" value="0">
+      <button class="btn" data-act="add-questao">➕ Registrar</button></div>
     </div>
     <div style="display:grid;gap:6px;margin-top:14px;">
-      ${S.questoes.slice().reverse().map(q=>{ const c=findConcurso(q.concursoId), d=findDisc(q.concursoId,q.disciplinaId); const pct=q.acertos+q.erros>0?Math.round((q.acertos/(q.acertos+q.erros))*100):0;
-        return `<div class="card row" style="justify-content:space-between;"><div style="font-size:12.5px;">${esc(d?.nome)} <span style="color:var(--muted);">· ${esc(c?.nome)} · banca ${esc(q.banca||"—")}</span></div>
-        <div class="row"><span style="font-size:12px;color:#22c55e;">${q.acertos} acertos</span><span style="font-size:12px;color:#ef4444;">${q.erros} erros</span><span class="pill" style="background:var(--accent)22;color:var(--accent);">${pct}%</span><button class="btn ghost" data-act="del-questao" data-id="${q.id}">🗑</button></div></div>`; }).join("")}
+      ${S.questoes.slice().reverse().map(q=>{
+        const key="questao:"+q.id;
+        if(UI.editing===key){
+          return `<div class="editbox" style="margin-bottom:6px;">
+            <div class="row"><select id="eq-concurso-${q.id}" data-act="eq-concurso-change" data-id="${q.id}">${concursoOptions(q.concursoId)}</select><select id="eq-disc-${q.id}">${discOptions(q.concursoId,q.disciplinaId)}</select><select id="eq-assunto-${q.id}">${assuntoOptions(q.concursoId,q.disciplinaId,q.assuntoId)}</select></div>
+            <div class="row" style="margin-top:6px;"><input id="eq-banca-${q.id}" value="${esc(q.banca||"")}" placeholder="Banca" style="width:120px;"><input id="eq-acertos-${q.id}" type="number" value="${q.acertos}" style="width:80px;"><input id="eq-erros-${q.id}" type="number" value="${q.erros}" style="width:80px;">
+            <button class="btn" data-act="save-questao" data-id="${q.id}">💾 Salvar</button><button class="btn ghost" data-act="toggle-edit" data-key="${key}">Cancelar</button></div>
+          </div>`;
+        }
+        const {c,d,a}=findAssunto(q.concursoId,q.disciplinaId,q.assuntoId); const pct=q.acertos+q.erros>0?Math.round((q.acertos/(q.acertos+q.erros))*100):0;
+        return `<div class="card row" style="justify-content:space-between;"><div style="font-size:12.5px;">${esc(d?.nome)}${a?` · ${esc(a.nome)}`:""} <span style="color:var(--muted);">· ${esc(c?.nome)} · banca ${esc(q.banca||"—")}</span></div>
+        <div class="row"><span style="font-size:12px;color:#22c55e;">${q.acertos} acertos</span><span style="font-size:12px;color:#ef4444;">${q.erros} erros</span><span class="pill" style="background:var(--accent)22;color:var(--accent);">${pct}%</span>${editBtn(key)}${delBtn(key)}</div></div>`; }).join("")}
     </div>`;
   } else if(tab==="simulados"){
-    body = `<div class="card row"><select id="sm-concurso">${concursoOptions("")}</select><input id="sm-nome" placeholder="Nome do simulado"><input id="sm-total" type="number" placeholder="Total" style="width:80px;" value="0"><input id="sm-acertos" type="number" placeholder="Acertos" style="width:80px;" value="0"><button class="btn" data-act="add-simulado">➕</button></div>
+    body = `<div class="card"><div class="row"><select id="sm-concurso" data-act="sm-concurso-change">${concursoOptions("")}</select><select id="sm-disc" data-act="sm-disc-change">${discOptions("","")}</select><select id="sm-assunto">${assuntoOptions("","","")}</select></div>
+    <div class="row" style="margin-top:8px;"><input id="sm-nome" placeholder="Nome do simulado"><input id="sm-total" type="number" placeholder="Total" style="width:80px;" value="0"><input id="sm-acertos" type="number" placeholder="Acertos" style="width:80px;" value="0"><button class="btn" data-act="add-simulado">➕ Registrar</button></div></div>
     <div style="display:grid;gap:6px;margin-top:14px;">
-      ${S.simulados.slice().reverse().map(sm=>{ const c=findConcurso(sm.concursoId); const pct=sm.totalQuestoes>0?Math.round((sm.acertos/sm.totalQuestoes)*100):0;
-        return `<div class="card row" style="justify-content:space-between;"><div><div style="font-size:13px;font-weight:600;">${esc(sm.nome)}</div><div style="font-size:11px;color:var(--muted);">${esc(c?.nome)} · ${sm.data}</div></div>
-        <div class="row"><span style="font-size:12px;">${sm.acertos}/${sm.totalQuestoes}</span><span class="pill" style="background:var(--accent)22;color:var(--accent);">${pct}%</span><button class="btn ghost" data-act="del-simulado" data-id="${sm.id}">🗑</button></div></div>`; }).join("")}
+      ${S.simulados.slice().reverse().map(sm=>{
+        const key="simulado:"+sm.id;
+        if(UI.editing===key){
+          return `<div class="editbox" style="margin-bottom:6px;">
+            <div class="row"><select id="esm-concurso-${sm.id}" data-act="esm-concurso-change" data-id="${sm.id}">${concursoOptions(sm.concursoId)}</select><select id="esm-disc-${sm.id}">${discOptions(sm.concursoId,sm.disciplinaId)}</select><select id="esm-assunto-${sm.id}">${assuntoOptions(sm.concursoId,sm.disciplinaId,sm.assuntoId)}</select></div>
+            <div class="row" style="margin-top:6px;"><input id="esm-nome-${sm.id}" value="${esc(sm.nome)}" style="flex:1;"><input id="esm-total-${sm.id}" type="number" value="${sm.totalQuestoes}" style="width:80px;"><input id="esm-acertos-${sm.id}" type="number" value="${sm.acertos}" style="width:80px;">
+            <button class="btn" data-act="save-simulado" data-id="${sm.id}">💾 Salvar</button><button class="btn ghost" data-act="toggle-edit" data-key="${key}">Cancelar</button></div>
+          </div>`;
+        }
+        const {c,d,a}=findAssunto(sm.concursoId,sm.disciplinaId,sm.assuntoId); const pct=sm.totalQuestoes>0?Math.round((sm.acertos/sm.totalQuestoes)*100):0;
+        return `<div class="card row" style="justify-content:space-between;"><div><div style="font-size:13px;font-weight:600;">${esc(sm.nome)}</div><div style="font-size:11px;color:var(--muted);">${esc(c?.nome)}${d?` · ${esc(d.nome)}`:""}${a?` · ${esc(a.nome)}`:""} · ${sm.data}</div></div>
+        <div class="row"><span style="font-size:12px;">${sm.acertos}/${sm.totalQuestoes}</span><span class="pill" style="background:var(--accent)22;color:var(--accent);">${pct}%</span>${editBtn(key)}${delBtn(key)}</div></div>`; }).join("")}
     </div>`;
   } else {
-    body = `<div class="card row"><select id="ds-concurso" data-act="ds-concurso-change">${concursoOptions("")}</select><select id="ds-disc">${discOptions("","")}</select><input id="ds-tema" placeholder="Tema da peça/redação" style="flex:1;"><input id="ds-nota" type="number" placeholder="Nota" style="width:70px;" value="0"><button class="btn" data-act="add-discursiva">➕</button></div>
+    body = `<div class="card"><div class="row"><select id="ds-concurso" data-act="ds-concurso-change">${concursoOptions("")}</select><select id="ds-disc" data-act="ds-disc-change">${discOptions("","")}</select><select id="ds-assunto">${assuntoOptions("","","")}</select></div>
+    <div class="row" style="margin-top:8px;"><input id="ds-tema" placeholder="Tema da peça/redação" style="flex:1;"><input id="ds-nota" type="number" placeholder="Nota" style="width:70px;" value="0"><button class="btn" data-act="add-discursiva">➕ Registrar</button></div></div>
     <div style="display:grid;gap:6px;margin-top:14px;">
-      ${S.discursivas.slice().reverse().map(ds=>{ const c=findConcurso(ds.concursoId), d=findDisc(ds.concursoId,ds.disciplinaId);
-        return `<div class="card row" style="justify-content:space-between;"><div><div style="font-size:13px;font-weight:600;">${esc(ds.tema)}</div><div style="font-size:11px;color:var(--muted);">${esc(d?.nome)} · ${esc(c?.nome)} · ${ds.data}</div></div>
-        <div class="row"><span class="pill" style="background:var(--accent)22;color:var(--accent);">${ds.nota}/10</span><button class="btn ghost" data-act="del-discursiva" data-id="${ds.id}">🗑</button></div></div>`; }).join("")}
+      ${S.discursivas.slice().reverse().map(ds=>{
+        const key="discursiva:"+ds.id;
+        if(UI.editing===key){
+          return `<div class="editbox" style="margin-bottom:6px;">
+            <div class="row"><select id="eds-concurso-${ds.id}" data-act="eds-concurso-change" data-id="${ds.id}">${concursoOptions(ds.concursoId)}</select><select id="eds-disc-${ds.id}">${discOptions(ds.concursoId,ds.disciplinaId)}</select><select id="eds-assunto-${ds.id}">${assuntoOptions(ds.concursoId,ds.disciplinaId,ds.assuntoId)}</select></div>
+            <div class="row" style="margin-top:6px;"><input id="eds-tema-${ds.id}" value="${esc(ds.tema)}" style="flex:1;"><input id="eds-nota-${ds.id}" type="number" value="${ds.nota}" style="width:70px;">
+            <button class="btn" data-act="save-discursiva" data-id="${ds.id}">💾 Salvar</button><button class="btn ghost" data-act="toggle-edit" data-key="${key}">Cancelar</button></div>
+          </div>`;
+        }
+        const {c,d,a}=findAssunto(ds.concursoId,ds.disciplinaId,ds.assuntoId);
+        return `<div class="card row" style="justify-content:space-between;"><div><div style="font-size:13px;font-weight:600;">${esc(ds.tema)}</div><div style="font-size:11px;color:var(--muted);">${esc(d?.nome)}${a?` · ${esc(a.nome)}`:""} · ${esc(c?.nome)} · ${ds.data}</div></div>
+        <div class="row"><span class="pill" style="background:var(--accent)22;color:var(--accent);">${ds.nota}/10</span>${editBtn(key)}${delBtn(key)}</div></div>`; }).join("")}
     </div>`;
   }
   return `<h2>Questões & Simulados & Discursivas</h2>
@@ -594,7 +821,7 @@ function renderQuestoes(){
   </div>${body}`;
 }
 
-/* ---- Jurisprudência & Legislação ---- */
+/* ---- Jurisprudência & Legislação (edição inline) ---- */
 function renderJuris(){
   const tab=UI.jurisTab;
   let body;
@@ -603,8 +830,15 @@ function renderJuris(){
       <textarea id="j-tese" placeholder="Resumo da tese..." rows="2" style="width:100%;margin-top:8px;"></textarea>
       <button class="btn" style="margin-top:8px;" data-act="add-juris">➕ Adicionar</button></div>
     <div style="display:grid;gap:8px;margin-top:14px;">
-      ${S.jurisprudencia.slice().reverse().map(j=>{ const c=findConcurso(j.concursoId), d=findDisc(j.concursoId,j.disciplinaId);
-        return `<div class="card"><div class="row" style="justify-content:space-between;"><strong style="font-size:13px;">${esc(j.tribunal)}</strong><button class="btn ghost" data-act="del-juris" data-id="${j.id}">🗑</button></div>
+      ${S.jurisprudencia.slice().reverse().map(j=>{
+        const key="juris:"+j.id;
+        if(UI.editing===key){
+          return `<div class="editbox"><div class="row"><select id="ej-concurso-${j.id}" data-act="ej-concurso-change" data-id="${j.id}">${concursoOptions(j.concursoId)}</select><select id="ej-disc-${j.id}">${discOptions(j.concursoId,j.disciplinaId)}</select><input id="ej-tribunal-${j.id}" value="${esc(j.tribunal)}"></div>
+          <textarea id="ej-tese-${j.id}" rows="2" style="width:100%;margin-top:6px;">${esc(j.tese)}</textarea>
+          <div class="row" style="margin-top:6px;"><button class="btn" data-act="save-juris" data-id="${j.id}">💾 Salvar</button><button class="btn ghost" data-act="toggle-edit" data-key="${key}">Cancelar</button></div></div>`;
+        }
+        const c=findConcurso(j.concursoId), d=findDisc(j.concursoId,j.disciplinaId);
+        return `<div class="card"><div class="row" style="justify-content:space-between;"><strong style="font-size:13px;">${esc(j.tribunal)}</strong><div class="row">${editBtn(key)}${delBtn(key)}</div></div>
         <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">${esc(d?.nome)} · ${esc(c?.nome)} · ${j.data}</div><div style="font-size:12.5px;">${esc(j.tese)}</div></div>`; }).join("")}
     </div>`;
   } else {
@@ -612,8 +846,15 @@ function renderJuris(){
       <textarea id="l-resumo" placeholder="Resumo / ponto de atenção..." rows="2" style="width:100%;margin-top:8px;"></textarea>
       <button class="btn" style="margin-top:8px;" data-act="add-leg">➕ Adicionar</button></div>
     <div style="display:grid;gap:8px;margin-top:14px;">
-      ${S.legislacao.slice().reverse().map(l=>{ const c=findConcurso(l.concursoId), d=findDisc(l.concursoId,l.disciplinaId);
-        return `<div class="card"><div class="row" style="justify-content:space-between;"><strong style="font-size:13px;">${esc(l.norma)} ${l.artigo?`- ${esc(l.artigo)}`:""}</strong><button class="btn ghost" data-act="del-leg" data-id="${l.id}">🗑</button></div>
+      ${S.legislacao.slice().reverse().map(l=>{
+        const key="leg:"+l.id;
+        if(UI.editing===key){
+          return `<div class="editbox"><div class="row"><select id="el-concurso-${l.id}" data-act="el-concurso-change" data-id="${l.id}">${concursoOptions(l.concursoId)}</select><select id="el-disc-${l.id}">${discOptions(l.concursoId,l.disciplinaId)}</select><input id="el-norma-${l.id}" value="${esc(l.norma)}"><input id="el-artigo-${l.id}" value="${esc(l.artigo||"")}"></div>
+          <textarea id="el-resumo-${l.id}" rows="2" style="width:100%;margin-top:6px;">${esc(l.resumo)}</textarea>
+          <div class="row" style="margin-top:6px;"><button class="btn" data-act="save-leg" data-id="${l.id}">💾 Salvar</button><button class="btn ghost" data-act="toggle-edit" data-key="${key}">Cancelar</button></div></div>`;
+        }
+        const c=findConcurso(l.concursoId), d=findDisc(l.concursoId,l.disciplinaId);
+        return `<div class="card"><div class="row" style="justify-content:space-between;"><strong style="font-size:13px;">${esc(l.norma)} ${l.artigo?`- ${esc(l.artigo)}`:""}</strong><div class="row">${editBtn(key)}${delBtn(key)}</div></div>
         <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">${esc(d?.nome)} · ${esc(c?.nome)}</div><div style="font-size:12.5px;">${esc(l.resumo)}</div></div>`; }).join("")}
     </div>`;
   }
@@ -660,13 +901,14 @@ function renderCadernos(){
   <div style="display:grid;gap:8px;margin-top:14px;">
     ${S.cadernos.slice().reverse().map(cad=>{
       const c=findConcurso(cad.concursoId), d=findDisc(cad.concursoId,cad.disciplinaId);
-      const isOpen=UI.openCaderno===cad.id;
+      const isOpen=UI.openCaderno===cad.id; const key="caderno:"+cad.id;
       return `<div class="card">
-        <div class="row" style="justify-content:space-between;cursor:pointer;" data-act="toggle-caderno" data-id="${cad.id}">
-          <div class="row">${isOpen?"▾":"▸"} 📓 <strong style="font-size:13px;">${esc(cad.titulo)}</strong>${d?`<span style="font-size:11px;color:var(--muted);">· ${esc(d.nome)} (${esc(c?.nome)})</span>`:""}</div>
-          <button class="btn ghost" data-act="del-caderno" data-id="${cad.id}" data-stop="1">🗑</button>
+        <div class="row" style="justify-content:space-between;">
+          <div class="row" style="cursor:pointer;" data-act="toggle-caderno" data-id="${cad.id}">${isOpen?"▾":"▸"} 📓 <strong style="font-size:13px;">${esc(cad.titulo)}</strong>${d?`<span style="font-size:11px;color:var(--muted);">· ${esc(d.nome)} (${esc(c?.nome)})</span>`:""}</div>
+          <div class="row">${delBtn(key)}</div>
         </div>
         ${isOpen?`<div style="margin-top:10px;">
+          <input data-act="caderno-titulo" data-id="${cad.id}" value="${esc(cad.titulo)}" style="width:100%;margin-bottom:8px;font-weight:600;">
           <div class="row" style="justify-content:space-between;margin-bottom:8px;">
             ${colorPickerHtml(cad.corTexto||"#e6e8eb","caderno-cor",cad.id)}
             <button class="btn ghost" data-act="toggle-tabela-caderno" data-id="${cad.id}">📋 ${cad.tabela?"Remover tabela":"Adicionar tabela"}</button>
@@ -689,11 +931,11 @@ function renderPostits(){
   </div>
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;margin-top:16px;">
     ${S.postits.slice().reverse().map(p=>{
-      const isOpen=UI.openPostit===p.id;
+      const isOpen=UI.openPostit===p.id; const key="postit:"+p.id;
       return `<div class="postit" style="background:${p.cor};color:${p.corTexto||'#2a2a2a'};">
         <div class="row" style="justify-content:space-between;margin-bottom:6px;">
           <button style="background:transparent;border:none;color:inherit;opacity:.6;" data-act="toggle-postit" data-id="${p.id}">✏️</button>
-          <button style="background:transparent;border:none;color:inherit;opacity:.6;" data-act="del-postit" data-id="${p.id}">🗑</button>
+          ${UI.confirmDelete===key? `<button style="background:transparent;border:1px solid #ef4444;color:#ef4444;border-radius:6px;" data-act="confirm-del" data-key="${key}">✔</button>` : `<button style="background:transparent;border:none;color:inherit;opacity:.6;" data-act="arm-del" data-key="${key}">🗑</button>`}
         </div>
         ${!isOpen? `<div style="white-space:pre-wrap;">${esc(p.texto)}</div>${p.tabela?`<table class="simple" style="margin-top:8px;font-size:11px;">${p.tabela.map(row=>`<tr>${row.map(cell=>`<td>${esc(cell)}</td>`).join("")}</tr>`).join("")}</table>`:""}`
         : `<textarea data-act="postit-texto" data-id="${p.id}" style="width:100%;min-height:70px;color:#2a2a2a;background:rgba(255,255,255,.5);">${esc(p.texto)}</textarea>
@@ -712,7 +954,7 @@ function renderFlashcards(){
     <div class="card" style="padding:8px 14px;display:flex;gap:16px;margin-bottom:0;"><span style="font-size:12px;">Total: <strong>${filtered.length}</strong></span><span style="font-size:12px;color:var(--accent);">Para hoje: <strong>${due.length}</strong></span></div>
     ${due.length>0?`<button class="btn" data-act="fc-start-review">🔁 Iniciar revisão</button>`:""}
   </div>
-  <div class="card"><div class="row"><select id="fc-concurso" data-act="fc-concurso-change">${concursoOptions("")}</select><select id="fc-disc">${discOptions("","")}</select></div>
+  <div class="card"><div class="row"><select id="fc-concurso" data-act="fc-concurso-change">${concursoOptions("")}</select><select id="fc-disc" data-act="fc-disc-change">${discOptions("","")}</select><select id="fc-assunto">${assuntoOptions("","","")}</select></div>
     <textarea id="fc-frente" placeholder="Frente (pergunta)..." rows="2" style="width:100%;margin-top:8px;color:${UI.fcCorTexto||"#e6e8eb"};"></textarea>
     <textarea id="fc-verso" placeholder="Verso (resposta)..." rows="2" style="width:100%;margin-top:8px;color:${UI.fcCorTexto||"#e6e8eb"};"></textarea>
     <div class="row" style="justify-content:space-between;margin-top:8px;">${colorPickerHtml(UI.fcCorTexto||"#e6e8eb","fc-cor","")}<button class="btn ghost" data-act="fc-toggle-tabela">📋 ${UI.fcTabela?"Remover tabela":"Adicionar tabela"}</button></div>
@@ -720,10 +962,18 @@ function renderFlashcards(){
     <button class="btn" style="margin-top:8px;" data-act="add-flashcard">➕ Criar flashcard</button>
   </div>
   <div style="display:grid;gap:6px;margin-top:14px;">
-    ${filtered.slice().reverse().map(f=>{ const c=findConcurso(f.concursoId), d=findDisc(f.concursoId,f.disciplinaId); const isDue=f.proximaRevisao<=todayISO();
-      return `<div class="card row" style="justify-content:space-between;"><div style="flex:1;"><div style="font-size:13px;color:${f.corTexto||'var(--text)'};">${esc(f.frente)}</div><div style="font-size:11px;color:var(--muted);">${esc(d?.nome)} · ${esc(c?.nome)}</div></div>
+    ${filtered.slice().reverse().map(f=>{
+      const key="flashcard:"+f.id;
+      if(UI.editing===key){
+        return `<div class="editbox" style="margin-bottom:6px;"><div class="row"><select id="ef-concurso-${f.id}" data-act="ef-concurso-change" data-id="${f.id}">${concursoOptions(f.concursoId)}</select><select id="ef-disc-${f.id}">${discOptions(f.concursoId,f.disciplinaId)}</select><select id="ef-assunto-${f.id}">${assuntoOptions(f.concursoId,f.disciplinaId,f.assuntoId)}</select></div>
+        <textarea id="ef-frente-${f.id}" rows="2" style="width:100%;margin-top:6px;">${esc(f.frente)}</textarea>
+        <textarea id="ef-verso-${f.id}" rows="2" style="width:100%;margin-top:6px;">${esc(f.verso)}</textarea>
+        <div class="row" style="margin-top:6px;"><button class="btn" data-act="save-flashcard" data-id="${f.id}">💾 Salvar</button><button class="btn ghost" data-act="toggle-edit" data-key="${key}">Cancelar</button></div></div>`;
+      }
+      const {c,d,a}=findAssunto(f.concursoId,f.disciplinaId,f.assuntoId); const isDue=f.proximaRevisao<=todayISO();
+      return `<div class="card row" style="justify-content:space-between;"><div style="flex:1;"><div style="font-size:13px;color:${f.corTexto||'var(--text)'};">${esc(f.frente)}</div><div style="font-size:11px;color:var(--muted);">${esc(d?.nome)}${a?` · ${esc(a.nome)}`:""} · ${esc(c?.nome)}</div></div>
       <span class="pill" style="background:${isDue?'var(--accent)22':'#4b556333'};color:${isDue?'var(--accent)':'#9ca3af'};">${isDue?"Pronto p/ revisar":`próx: ${f.proximaRevisao}`}</span>
-      <button class="btn ghost" data-act="del-flashcard" data-id="${f.id}">🗑</button></div>`; }).join("")}
+      ${editBtn(key)}${delBtn(key)}</div>`; }).join("")}
     ${filtered.length===0?`<div class="card" style="color:var(--muted);">Nenhum flashcard ainda.</div>`:""}
   </div>`;
 }
@@ -733,9 +983,9 @@ function renderFlashcardReview(){
     return `<div class="card" style="text-align:center;padding:40px;"><div style="font-size:32px;margin-bottom:10px;">🎉</div><h3 style="margin-bottom:8px;">Sessão concluída!</h3><div style="color:var(--muted);font-size:13px;margin-bottom:16px;">Você revisou ${queue.length} flashcard(s) hoje.</div><button class="btn" data-act="fc-exit">Voltar</button></div>`;
   }
   const card=S.flashcards.find(f=>f.id===queue[idx]); if(!card) return "";
-  const c=findConcurso(card.concursoId), d=findDisc(card.concursoId,card.disciplinaId);
+  const {c,d,a}=findAssunto(card.concursoId,card.disciplinaId,card.assuntoId);
   const flipped=UI.fcReview.flipped;
-  return `<div class="row" style="justify-content:space-between;margin-bottom:12px;font-size:12px;color:var(--muted);"><span>${esc(d?.nome)} · ${esc(c?.nome)}</span><span>${idx+1} / ${queue.length}</span></div>
+  return `<div class="row" style="justify-content:space-between;margin-bottom:12px;font-size:12px;color:var(--muted);"><span>${esc(d?.nome)}${a?` · ${esc(a.nome)}`:""} · ${esc(c?.nome)}</span><span>${idx+1} / ${queue.length}</span></div>
   <div class="card" style="min-height:220px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:30px;text-align:center;cursor:${!flipped?'pointer':'default'};" ${!flipped?`data-act="fc-flip"`:""}>
     <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px;">${flipped?"RESPOSTA":"PERGUNTA (clique para revelar)"}</div>
     <div style="font-size:17px;color:${card.corTexto||'var(--text)'};white-space:pre-wrap;">${esc(flipped?card.verso:card.frente)}</div>
@@ -760,15 +1010,45 @@ function tableEditorHtml(tabela,group,id){
   <div class="row" style="margin-top:6px;"><button class="btn ghost" data-act="table-addrow" data-group="${group}" data-id="${id}">➕ Linha</button><button class="btn ghost" data-act="table-addcol" data-group="${group}" data-id="${id}">➕ Coluna</button></div></div>`;
 }
 
-/* ---- Metas ---- */
+/* ---- Metas (abas diária/semanal/mensal + checklist + edição inline) ---- */
+function metaSecs(periodo){ return periodo==="diaria"? secsToday() : periodo==="mensal"? secsMonth() : secsWeek(); }
+function metaLabel(periodo){ return periodo==="diaria"? "hoje" : periodo==="mensal"? "este mês" : "esta semana"; }
 function renderMetas(){
-  const semH=secsWeek()/3600;
-  return `<h2>Metas</h2><div style="display:grid;gap:10px;">
-  ${S.metas.map(m=>{ const pct=Math.min(100,Math.round((semH/m.metaHoras)*100));
-    return `<div class="card"><div class="row" style="justify-content:space-between;margin-bottom:8px;"><strong style="font-size:13px;">${esc(m.titulo)}</strong><button class="btn ghost" data-act="del-meta" data-id="${m.id}">🗑</button></div>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:6px;">${semH.toFixed(1)}h de ${m.metaHoras}h esta semana (${pct}%)</div><div class="barwrap"><div class="barfill" style="width:${pct}%;"></div></div></div>`; }).join("")}
+  const tab=UI.metasTab;
+  const metasFiltradas=S.metas.filter(m=>(m.periodo||"semanal")===tab);
+  return `<h2>Metas</h2>
+  <div style="margin-bottom:18px;">
+    <button class="subtab ${tab==='diaria'?'active':''}" data-act="metastab" data-tab="diaria">Diárias</button>
+    <button class="subtab ${tab==='semanal'?'active':''}" data-act="metastab" data-tab="semanal">Semanais</button>
+    <button class="subtab ${tab==='mensal'?'active':''}" data-act="metastab" data-tab="mensal">Mensais</button>
   </div>
-  <div class="card row" style="margin-top:10px;"><input id="meta-titulo" placeholder="Nova meta..." style="flex:1;"><input id="meta-horas" type="number" value="10" style="width:80px;"><button class="btn" data-act="add-meta">➕ Adicionar</button></div>`;
+  <div style="display:grid;gap:10px;">
+  ${metasFiltradas.map(m=>{
+    const horas=metaSecs(m.periodo)/3600; const pct=Math.min(100,Math.round((horas/m.metaHoras)*100)); const tasks=m.tasks||[]; const doneCt=tasks.filter(t=>t.done).length;
+    const key="meta:"+m.id;
+    if(UI.editing===key){
+      return `<div class="card editbox">
+        <div class="row"><input id="em-titulo-${m.id}" value="${esc(m.titulo)}" style="flex:1;"><input id="em-horas-${m.id}" type="number" value="${m.metaHoras}" style="width:80px;">
+        <select id="em-periodo-${m.id}"><option value="diaria" ${m.periodo==="diaria"?"selected":""}>Diária</option><option value="semanal" ${m.periodo==="semanal"?"selected":""}>Semanal</option><option value="mensal" ${m.periodo==="mensal"?"selected":""}>Mensal</option></select>
+        <button class="btn" data-act="save-meta" data-id="${m.id}">💾 Salvar</button><button class="btn ghost" data-act="toggle-edit" data-key="${key}">Cancelar</button></div>
+      </div>`;
+    }
+    return `<div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:8px;"><strong style="font-size:13px;">${esc(m.titulo)}</strong>
+      <div class="row">${editBtn(key)}${delBtn(key)}</div></div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:6px;">${horas.toFixed(1)}h de ${m.metaHoras}h ${metaLabel(m.periodo)} (${pct}%)</div>
+    <div class="barwrap" style="margin-bottom:12px;"><div class="barfill" style="width:${pct}%;"></div></div>
+    <h4 class="label" style="margin-bottom:6px;">CHECKLIST ${tasks.length?`(${doneCt}/${tasks.length})`:""}</h4>
+    ${tasks.map(t=>`<div class="checkrow ${t.done?'done':''}">
+      <input type="checkbox" data-act="toggle-task" data-mid="${m.id}" data-tid="${t.id}" ${t.done?"checked":""}>
+      <span style="font-size:13px;flex:1;">${esc(t.texto)}</span>
+      <button class="iconbtn" data-act="arm-del" data-key="task:${m.id}:${t.id}">🗑</button>
+    </div>`).join("")}
+    <div class="row" style="margin-top:8px;"><input id="task-input-${m.id}" placeholder="Nova tarefa..." style="flex:1;"><button class="btn ghost" data-act="add-task" data-mid="${m.id}">➕</button></div>
+    </div>`; }).join("")}
+  ${metasFiltradas.length===0?`<div class="card" style="color:var(--muted);">Nenhuma meta ${tab==='diaria'?'diária':tab==='mensal'?'mensal':'semanal'} ainda.</div>`:""}
+  </div>
+  <div class="card row" style="margin-top:10px;"><input id="meta-titulo" placeholder="Nova meta..." style="flex:1;"><input id="meta-horas" type="number" value="${tab==='diaria'?2:tab==='mensal'?80:10}" style="width:80px;"><button class="btn" data-act="add-meta">➕ Adicionar meta ${tab==='diaria'?'diária':tab==='mensal'?'mensal':'semanal'}</button></div>`;
 }
 
 /* ---- Config ---- */
@@ -777,8 +1057,14 @@ function renderConfig(){
   return `<h2>Configurações</h2>
   <div class="card" style="max-width:460px;">
     <h4 class="label">MINHA CONTA</h4>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Conectado como <strong style="color:var(--text);">${esc(user?.nome)}</strong></div>
-    <div class="row"><button class="btn ghost" data-act="account-rename">Renomear</button><button class="btn ghost" data-act="account-pwd">Alterar senha</button></div>
+    ${UI.accountEditing? `
+      <div class="row"><input id="acc-nome" value="${esc(user?.nome)}" placeholder="Nome" style="flex:1;"></div>
+      <div class="row" style="margin-top:8px;"><input id="acc-pwd" type="password" placeholder="Nova senha (opcional)" style="flex:1;"></div>
+      <div class="row" style="margin-top:8px;"><button class="btn" data-act="save-account">💾 Salvar</button><button class="btn ghost" data-act="cancel-account">Cancelar</button></div>
+    `:`
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Conectado como <strong style="color:var(--text);">${esc(user?.nome)}</strong></div>
+      <button class="btn ghost" data-act="edit-account">✏️ Editar conta</button>
+    `}
   </div>
   <div class="card" style="max-width:460px;">
     <h4 class="label">TEMA</h4>
@@ -793,85 +1079,95 @@ function renderConfig(){
   </div>
   <div class="card" style="max-width:460px;">
     <h4 class="label">DADOS</h4>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Seus dados ficam salvos neste navegador (localStorage). Use exportar/importar para fazer backup ou migrar para outro computador/navegador.</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Seus dados ficam salvos neste navegador (localStorage). Use exportar/importar para backup ou migração.</div>
     <div class="row" style="margin-bottom:10px;"><button class="btn ghost" data-act="export-data">⬇ Exportar dados (.json)</button><label class="btn ghost" style="cursor:pointer;">⬆ Importar dados<input type="file" accept=".json" id="import-file" style="display:none;"></label></div>
-    <button class="btn danger" style="border:1px solid #ef4444;" data-act="reset-data">Resetar todos os dados</button>
+    ${UI.confirmDelete==="reset-data"? `<div class="row"><span style="font-size:12px;color:#ef4444;">Apagar TODOS os dados deste perfil?</span><button class="iconbtn danger" data-act="confirm-del" data-key="reset-data">✔ Confirmar</button><button class="iconbtn" data-act="cancel-del">✕</button></div>`
+      : `<button class="btn danger" data-act="arm-del" data-key="reset-data">Resetar todos os dados</button>`}
   </div>`;
 }
 
 /* ============ EVENT DELEGATION ============ */
 document.addEventListener("click",(e)=>{
   if(!S){
-    const lb=e.target.closest("[data-act]"); if(lb && lb.dataset.act.startsWith("login")) loginAction(lb.dataset.act,lb);
+    const lb=e.target.closest("[data-act]"); if(lb && (lb.dataset.act.startsWith("login")||["arm-forgot","confirm-forgot","cancel-del"].includes(lb.dataset.act))) loginAction(lb.dataset.act,lb);
     return;
   }
   const t=e.target.closest("[data-act]"); if(!t) return;
   const act=t.dataset.act, id=t.dataset.id;
   switch(act){
-    case "nav": UI.section=t.dataset.section; render(); break;
+    case "nav": UI.section=t.dataset.section; UI.editing=null; UI.confirmDelete=null; render(); break;
     case "lock": stopTimerInterval(); S=null; CUR_USER=null; UI.loginSelectedUser=null; renderLogin(); break;
+    case "toggle-edit": UI.editing = UI.editing===t.dataset.key? null : t.dataset.key; renderSection(); break;
+    case "arm-del": UI.confirmDelete=t.dataset.key; renderSection(); break;
+    case "cancel-del": UI.confirmDelete=null; renderSection(); break;
+    case "confirm-del": { const key=t.dataset.key; if(key==="reset-data"){ mutate(()=>{ Object.assign(S,defaultState()); }); UI.confirmDelete=null; } else performDelete(key); break; }
     case "toggle-concurso": UI.openConcurso[id]=!UI.openConcurso[id]; renderSection(); break;
     case "toggle-disc": UI.openDisc[id]=!UI.openDisc[id]; renderSection(); break;
     case "gerar-ciclo": gerarCiclo(id); UI.section="ciclo"; mutate(()=>{}); break;
+    case "save-concurso": { const c=findConcurso(id); if(c){ c.nome=document.getElementById("ec-nome-"+id).value.trim()||c.nome; c.cor=document.getElementById("ec-cor-"+id).value; } UI.editing=null; render(); scheduleSave(); break; }
+    case "save-disc": { const d=findDisc(t.dataset.cid,t.dataset.did); if(d){ d.nome=document.getElementById("ed-nome-"+t.dataset.did).value.trim()||d.nome; d.peso=document.getElementById("ed-peso-"+t.dataset.did).value; } UI.editing=null; render(); scheduleSave(); break; }
+    case "save-assunto": { const d=findDisc(t.dataset.cid,t.dataset.did); const a=d?.assuntos.find(x=>x.id===t.dataset.aid); if(a){ a.nome=document.getElementById("ea-nome-"+t.dataset.aid).value.trim()||a.nome; } UI.editing=null; render(); scheduleSave(); break; }
+    case "add-disc-inline": { const cid=t.dataset.cid, nome=document.getElementById("add-disc-inline-"+cid).value.trim(), peso=document.getElementById("add-disc-peso-"+cid).value; if(nome) mutate(()=>{ const c=findConcurso(cid); c.disciplinas.push({id:uid(),nome,peso,custom:true,assuntos:[]}); }); break; }
+    case "add-assunto-inline": { const did=t.dataset.did, nome=document.getElementById("add-assunto-inline-"+did).value.trim(); if(nome) mutate(()=>{ const d=findDisc(t.dataset.cid,did); d.assuntos.push({id:uid(),nome,custom:true}); }); break; }
     case "add-concurso": { const nome=document.getElementById("new-concurso-nome").value.trim(); if(nome) mutate(()=>{ S.concursos.push({id:uid(),nome,sigla:nome,cor:"#999",custom:true,disciplinas:[]}); }); break; }
     case "add-disciplina": { const cid=document.getElementById("cd-concurso").value, nome=document.getElementById("cd-disc-nome").value.trim(), peso=document.getElementById("cd-disc-peso").value;
-      if(cid&&nome) mutate(()=>{ const c=findConcurso(cid); c.disciplinas.push({id:uid(),nome,peso,custom:true,assuntos:[]}); document.getElementById("cd-disc-nome").value=""; }); break; }
+      if(cid&&nome) mutate(()=>{ const c=findConcurso(cid); c.disciplinas.push({id:uid(),nome,peso,custom:true,assuntos:[]}); }); break; }
     case "add-assunto": { const cid=document.getElementById("ca-concurso").value, did=document.getElementById("ca-disc").value, nome=document.getElementById("ca-assunto-nome").value.trim();
-      if(cid&&did&&nome) mutate(()=>{ const d=findDisc(cid,did); d.assuntos.push({id:uid(),nome,custom:true}); document.getElementById("ca-assunto-nome").value=""; }); break; }
+      if(cid&&did&&nome) mutate(()=>{ const d=findDisc(cid,did); d.assuntos.push({id:uid(),nome,custom:true}); }); break; }
     case "add-ciclo-disc": { const cid=document.getElementById("ciclo-add-concurso").value, did=document.getElementById("ciclo-add-disc").value; if(cid&&did) mutate(()=>{ adicionarDisciplinaCiclo(cid,did); }); break; }
-    case "del-ciclo": mutate(()=>{ S.ciclo=S.ciclo.filter(x=>x.id!==id); }); break;
     case "timer-start": { const sel=UI.timerSel; if(!sel.concursoId||!sel.disciplinaId) return; UI.timerElapsed=0; UI.timerRunning=true; startTimerInterval(); renderSection(); break; }
     case "timer-pause": UI.timerRunning=false; stopTimerInterval(); renderSection(); break;
     case "timer-resume": UI.timerRunning=true; startTimerInterval(); renderSection(); break;
     case "timer-stop": stopTimerStop(); break;
+    case "save-registro": saveRegistro(id); break;
+    case "add-registro-manual": addRegistroManual(); break;
     case "concluir-revisao": mutate(()=>{ marcarRevisaoConcluida(id); }); break;
-    case "qtab": UI.questoesTab=t.dataset.tab; renderSection(); break;
-    case "add-questao": { const cid=document.getElementById("q-concurso").value, did=document.getElementById("q-disc").value, banca=document.getElementById("q-banca").value, acertos=Number(document.getElementById("q-acertos").value)||0, erros=Number(document.getElementById("q-erros").value)||0;
-      if(cid&&did){ let redir=false; mutate(()=>{ S.questoes.push({id:uid(),concursoId:cid,disciplinaId:did,banca,acertos,erros,ts:new Date().toISOString()}); redir=checkDesempenhoRevisao(cid,did); }); if(redir){ UI.section="revisoes"; render(); } } break; }
-    case "del-questao": mutate(()=>{ S.questoes=S.questoes.filter(x=>x.id!==id); }); break;
-    case "add-simulado": { const cid=document.getElementById("sm-concurso").value, nome=document.getElementById("sm-nome").value.trim(), total=Number(document.getElementById("sm-total").value)||0, acertos=Number(document.getElementById("sm-acertos").value)||0;
-      if(cid&&nome) mutate(()=>{ S.simulados.push({id:uid(),concursoId:cid,nome,totalQuestoes:total,acertos,data:todayISO()}); }); break; }
-    case "del-simulado": mutate(()=>{ S.simulados=S.simulados.filter(x=>x.id!==id); }); break;
-    case "add-discursiva": { const cid=document.getElementById("ds-concurso").value, did=document.getElementById("ds-disc").value, tema=document.getElementById("ds-tema").value.trim(), nota=Number(document.getElementById("ds-nota").value)||0;
-      if(cid&&did&&tema) mutate(()=>{ S.discursivas.push({id:uid(),concursoId:cid,disciplinaId:did,tema,nota,data:todayISO()}); }); break; }
-    case "del-discursiva": mutate(()=>{ S.discursivas=S.discursivas.filter(x=>x.id!==id); }); break;
-    case "jtab": UI.jurisTab=t.dataset.tab; renderSection(); break;
+    case "qtab": UI.questoesTab=t.dataset.tab; UI.editing=null; renderSection(); break;
+    case "add-questao": { const cid=document.getElementById("q-concurso").value, did=document.getElementById("q-disc").value, aid=document.getElementById("q-assunto").value||null, banca=document.getElementById("q-banca").value, acertos=Number(document.getElementById("q-acertos").value)||0, erros=Number(document.getElementById("q-erros").value)||0;
+      if(cid&&did){ let redir=false; mutate(()=>{ S.questoes.push({id:uid(),concursoId:cid,disciplinaId:did,assuntoId:aid,banca,acertos,erros,ts:new Date().toISOString()}); redir=checkDesempenhoRevisao(cid,did); }); if(redir){ UI.section="revisoes"; render(); } } break; }
+    case "save-questao": { const q=S.questoes.find(x=>x.id===id); if(q){ q.concursoId=document.getElementById("eq-concurso-"+id).value; q.disciplinaId=document.getElementById("eq-disc-"+id).value; q.assuntoId=document.getElementById("eq-assunto-"+id).value||null; q.banca=document.getElementById("eq-banca-"+id).value; q.acertos=Math.max(0,Number(document.getElementById("eq-acertos-"+id).value)||0); q.erros=Math.max(0,Number(document.getElementById("eq-erros-"+id).value)||0); checkDesempenhoRevisao(q.concursoId,q.disciplinaId); } UI.editing=null; render(); scheduleSave(); break; }
+    case "add-simulado": { const cid=document.getElementById("sm-concurso").value, did=document.getElementById("sm-disc").value||null, aid=document.getElementById("sm-assunto").value||null, nome=document.getElementById("sm-nome").value.trim(), total=Number(document.getElementById("sm-total").value)||0, acertos=Number(document.getElementById("sm-acertos").value)||0;
+      if(cid&&nome) mutate(()=>{ S.simulados.push({id:uid(),concursoId:cid,disciplinaId:did,assuntoId:aid,nome,totalQuestoes:total,acertos,data:todayISO()}); }); break; }
+    case "save-simulado": { const sm=S.simulados.find(x=>x.id===id); if(sm){ sm.concursoId=document.getElementById("esm-concurso-"+id).value; sm.disciplinaId=document.getElementById("esm-disc-"+id).value||null; sm.assuntoId=document.getElementById("esm-assunto-"+id).value||null; sm.nome=document.getElementById("esm-nome-"+id).value.trim()||sm.nome; sm.totalQuestoes=Math.max(0,Number(document.getElementById("esm-total-"+id).value)||0); sm.acertos=Math.max(0,Number(document.getElementById("esm-acertos-"+id).value)||0); } UI.editing=null; render(); scheduleSave(); break; }
+    case "add-discursiva": { const cid=document.getElementById("ds-concurso").value, did=document.getElementById("ds-disc").value, aid=document.getElementById("ds-assunto").value||null, tema=document.getElementById("ds-tema").value.trim(), nota=Number(document.getElementById("ds-nota").value)||0;
+      if(cid&&did&&tema) mutate(()=>{ S.discursivas.push({id:uid(),concursoId:cid,disciplinaId:did,assuntoId:aid,tema,nota,data:todayISO()}); }); break; }
+    case "save-discursiva": { const ds=S.discursivas.find(x=>x.id===id); if(ds){ ds.concursoId=document.getElementById("eds-concurso-"+id).value; ds.disciplinaId=document.getElementById("eds-disc-"+id).value; ds.assuntoId=document.getElementById("eds-assunto-"+id).value||null; ds.tema=document.getElementById("eds-tema-"+id).value.trim()||ds.tema; ds.nota=Number(document.getElementById("eds-nota-"+id).value)||ds.nota; } UI.editing=null; render(); scheduleSave(); break; }
+    case "jtab": UI.jurisTab=t.dataset.tab; UI.editing=null; renderSection(); break;
     case "add-juris": { const cid=document.getElementById("j-concurso").value, did=document.getElementById("j-disc").value, tribunal=document.getElementById("j-tribunal").value, tese=document.getElementById("j-tese").value.trim();
       if(cid&&did&&tese) mutate(()=>{ S.jurisprudencia.push({id:uid(),concursoId:cid,disciplinaId:did,tribunal,tese,data:todayISO()}); }); break; }
-    case "del-juris": mutate(()=>{ S.jurisprudencia=S.jurisprudencia.filter(x=>x.id!==id); }); break;
+    case "save-juris": { const j=S.jurisprudencia.find(x=>x.id===id); if(j){ j.concursoId=document.getElementById("ej-concurso-"+id).value; j.disciplinaId=document.getElementById("ej-disc-"+id).value; j.tribunal=document.getElementById("ej-tribunal-"+id).value; j.tese=document.getElementById("ej-tese-"+id).value; } UI.editing=null; render(); scheduleSave(); break; }
     case "add-leg": { const cid=document.getElementById("l-concurso").value, did=document.getElementById("l-disc").value, norma=document.getElementById("l-norma").value.trim(), artigo=document.getElementById("l-artigo").value, resumo=document.getElementById("l-resumo").value;
       if(cid&&did&&norma) mutate(()=>{ S.legislacao.push({id:uid(),concursoId:cid,disciplinaId:did,norma,artigo,resumo}); }); break; }
-    case "del-leg": mutate(()=>{ S.legislacao=S.legislacao.filter(x=>x.id!==id); }); break;
+    case "save-leg": { const l=S.legislacao.find(x=>x.id===id); if(l){ l.concursoId=document.getElementById("el-concurso-"+id).value; l.disciplinaId=document.getElementById("el-disc-"+id).value; l.norma=document.getElementById("el-norma-"+id).value; l.artigo=document.getElementById("el-artigo-"+id).value; l.resumo=document.getElementById("el-resumo-"+id).value; } UI.editing=null; render(); scheduleSave(); break; }
     case "mapa-concurso": UI.mapaConcurso=id; renderSection(); break;
     case "notestab": UI.notesTab=t.dataset.tab; renderSection(); break;
     case "add-caderno": { const cid=document.getElementById("cad-concurso").value, did=document.getElementById("cad-disc").value, titulo=document.getElementById("cad-titulo").value.trim();
-      if(titulo) mutate(()=>{ S.cadernos.push({id:uid(),concursoId:cid,disciplinaId:did,titulo,conteudo:"",corTexto:"#e6e8eb",tabela:null,ts:new Date().toISOString()}); document.getElementById("cad-titulo").value=""; }); break; }
-    case "toggle-caderno": if(t.dataset.stop) return; UI.openCaderno = UI.openCaderno===id? null:id; renderSection(); break;
-    case "del-caderno": mutate(()=>{ S.cadernos=S.cadernos.filter(x=>x.id!==id); }); break;
+      if(titulo) mutate(()=>{ S.cadernos.push({id:uid(),concursoId:cid,disciplinaId:did,titulo,conteudo:"",corTexto:"#e6e8eb",tabela:null,ts:new Date().toISOString()}); }); break; }
+    case "toggle-caderno": UI.openCaderno = UI.openCaderno===id? null:id; renderSection(); break;
     case "toggle-tabela-caderno": mutate(()=>{ const c=S.cadernos.find(x=>x.id===id); c.tabela=c.tabela?null:blankTable(); }); break;
     case "pi-cor": UI.piCor=t.dataset.color; renderSection(); break;
-    case "add-postit": { const texto=document.getElementById("pi-texto").value.trim(); if(texto) mutate(()=>{ S.postits.push({id:uid(),texto,cor:UI.piCor||POSTIT_COLORS[0],corTexto:UI.piCorTexto||"#2a2a2a",tabela:null,ts:new Date().toISOString()}); document.getElementById("pi-texto").value=""; }); break; }
+    case "add-postit": { const texto=document.getElementById("pi-texto").value.trim(); if(texto) mutate(()=>{ S.postits.push({id:uid(),texto,cor:UI.piCor||POSTIT_COLORS[0],corTexto:UI.piCorTexto||"#2a2a2a",tabela:null,ts:new Date().toISOString()}); }); break; }
     case "toggle-postit": UI.openPostit = UI.openPostit===id? null:id; renderSection(); break;
-    case "del-postit": mutate(()=>{ S.postits=S.postits.filter(x=>x.id!==id); }); break;
     case "toggle-tabela-postit": mutate(()=>{ const p=S.postits.find(x=>x.id===id); p.tabela=p.tabela?null:blankTable(); }); break;
-    case "fc-filter-change": break;
     case "fc-toggle-tabela": UI.fcTabela = UI.fcTabela? null: blankTable(); renderSection(); break;
-    case "add-flashcard": { const cid=document.getElementById("fc-concurso").value, did=document.getElementById("fc-disc").value, frente=document.getElementById("fc-frente").value.trim(), verso=document.getElementById("fc-verso").value.trim();
-      if(cid&&did&&frente&&verso) mutate(()=>{ S.flashcards.push({id:uid(),concursoId:cid,disciplinaId:did,frente,verso,corTexto:UI.fcCorTexto||"#e6e8eb",tabela:UI.fcTabela,intervalo:0,easeFactor:2.5,repeticoes:0,proximaRevisao:todayISO(),status:"nova"}); UI.fcTabela=null; }); break; }
-    case "del-flashcard": mutate(()=>{ S.flashcards=S.flashcards.filter(x=>x.id!==id); }); break;
+    case "add-flashcard": { const cid=document.getElementById("fc-concurso").value, did=document.getElementById("fc-disc").value, aid=document.getElementById("fc-assunto").value||null, frente=document.getElementById("fc-frente").value.trim(), verso=document.getElementById("fc-verso").value.trim();
+      if(cid&&did&&frente&&verso) mutate(()=>{ S.flashcards.push({id:uid(),concursoId:cid,disciplinaId:did,assuntoId:aid,frente,verso,corTexto:UI.fcCorTexto||"#e6e8eb",tabela:UI.fcTabela,intervalo:0,easeFactor:2.5,repeticoes:0,proximaRevisao:todayISO(),status:"nova"}); UI.fcTabela=null; }); break; }
+    case "save-flashcard": { const f=S.flashcards.find(x=>x.id===id); if(f){ f.concursoId=document.getElementById("ef-concurso-"+id).value; f.disciplinaId=document.getElementById("ef-disc-"+id).value; f.assuntoId=document.getElementById("ef-assunto-"+id).value||null; f.frente=document.getElementById("ef-frente-"+id).value.trim()||f.frente; f.verso=document.getElementById("ef-verso-"+id).value.trim()||f.verso; } UI.editing=null; render(); scheduleSave(); break; }
     case "fc-start-review": { const filtered=S.flashcards.filter(f=>!UI.fcFilter||f.concursoId===UI.fcFilter); const due=filtered.filter(f=>f.proximaRevisao<=todayISO()); if(due.length) UI.fcReview={queue:due.map(f=>f.id),idx:0,flipped:false}; renderSection(); break; }
     case "fc-flip": UI.fcReview.flipped=true; renderSection(); break;
     case "fc-grade": { const rating=t.dataset.rating; const cardId=UI.fcReview.queue[UI.fcReview.idx]; mutateSilent(()=>{ const card=S.flashcards.find(f=>f.id===cardId); Object.assign(card,reviewCard(card,rating)); }); UI.fcReview.idx++; UI.fcReview.flipped=false; renderSection(); break; }
     case "fc-exit": UI.fcReview=null; renderSection(); break;
-    case "del-meta": mutate(()=>{ S.metas=S.metas.filter(x=>x.id!==id); }); break;
-    case "add-meta": { const titulo=document.getElementById("meta-titulo").value.trim(), horas=Number(document.getElementById("meta-horas").value)||10; if(titulo) mutate(()=>{ S.metas.push({id:uid(),titulo,metaHoras:horas}); }); break; }
-    case "account-rename": { const n=prompt("Novo nome de usuário:",AUTH.users.find(u=>u.id===CUR_USER).nome); if(n&&n.trim()){ AUTH.users.find(u=>u.id===CUR_USER).nome=n.trim(); saveAuth(); render(); } break; }
-    case "account-pwd": { const p=prompt("Nova senha (mín. 4 caracteres):"); if(p){ if(p.length>=4){ AUTH.users.find(u=>u.id===CUR_USER).senha=p; saveAuth(); } else alert("Senha muito curta."); } break; }
+    case "metastab": UI.metasTab=t.dataset.tab; UI.editing=null; renderSection(); break;
+    case "save-meta": { const m=S.metas.find(x=>x.id===id); if(m){ m.titulo=document.getElementById("em-titulo-"+id).value.trim()||m.titulo; m.metaHoras=Math.max(1,Number(document.getElementById("em-horas-"+id).value)||m.metaHoras); m.periodo=document.getElementById("em-periodo-"+id).value; } UI.editing=null; render(); scheduleSave(); break; }
+    case "add-meta": { const titulo=document.getElementById("meta-titulo").value.trim(), horas=Number(document.getElementById("meta-horas").value)||10; if(titulo) mutate(()=>{ S.metas.push({id:uid(),titulo,metaHoras:horas,periodo:UI.metasTab,tasks:[]}); }); break; }
+    case "add-task": { const mid=t.dataset.mid; const input=document.getElementById("task-input-"+mid); const texto=input.value.trim(); if(texto) mutate(()=>{ const m=S.metas.find(x=>x.id===mid); m.tasks=m.tasks||[]; m.tasks.push({id:uid(),texto,done:false}); }); break; }
+    case "edit-account": UI.accountEditing=true; renderSection(); break;
+    case "cancel-account": UI.accountEditing=false; renderSection(); break;
+    case "save-account": { const u=AUTH.users.find(x=>x.id===CUR_USER); const novoNome=document.getElementById("acc-nome").value.trim(); const novaSenha=document.getElementById("acc-pwd").value; if(novoNome) u.nome=novoNome; if(novaSenha&&novaSenha.length>=4) u.senha=novaSenha; saveAuth(); UI.accountEditing=false; render(); break; }
     case "theme-mode": mutate(()=>{ S.theme.mode=t.dataset.mode; }); break;
     case "theme-accent": mutate(()=>{ S.theme.accent=t.dataset.color; }); break;
     case "theme-bg-reset": mutate(()=>{ S.theme.customBg=null; }); break;
     case "export-data": exportData(); break;
-    case "reset-data": if(confirm("Resetar todos os dados?")) mutate(()=>{ Object.assign(S,defaultState()); }); break;
     case "table-addrow": tableOp(t,"addrow"); break;
     case "table-addcol": tableOp(t,"addcol"); break;
     case "table-delrow": tableOp(t,"delrow",Number(t.dataset.r)); break;
@@ -886,21 +1182,30 @@ document.addEventListener("change",(e)=>{
   if(act==="theme-accent-custom") mutate(()=>{ S.theme.accent=t.value; });
   else if(act==="theme-bg-custom") mutate(()=>{ S.theme.customBg=t.value; });
   else if(act==="colorpick-custom") colorPickAction(t.dataset.group,t.dataset.id,t.value);
-  else if(act==="cd-concurso-change"){}
-  else if(act==="ca-concurso-change"){ const cid=t.value; document.getElementById("ca-disc").innerHTML=discOptions(cid,""); }
-  else if(act==="ca-disc-change"){}
-  else if(act==="ciclo-concurso-change"){ const cid=t.value; document.getElementById("ciclo-add-disc").innerHTML=cicloDiscOptions(cid); }
+  else if(act==="ca-concurso-change"){ document.getElementById("ca-disc").innerHTML=discOptions(t.value,""); }
+  else if(act==="ciclo-concurso-change"){ document.getElementById("ciclo-add-disc").innerHTML=cicloDiscOptions(t.value); }
   else if(act==="t-concurso-change"){ UI.timerSel={concursoId:t.value,disciplinaId:"",assuntoId:"",tipo:UI.timerSel.tipo}; renderSection(); }
   else if(act==="t-disc-change"){ UI.timerSel.disciplinaId=t.value; UI.timerSel.assuntoId=""; renderSection(); }
   else if(act==="t-assunto-change"){ UI.timerSel.assuntoId=t.value; }
   else if(act==="t-tipo-change"){ UI.timerSel.tipo=t.value; }
-  else if(act==="q-concurso-change"){ const cid=t.value; document.getElementById("q-disc").innerHTML=discOptions(cid,""); }
-  else if(act==="ds-concurso-change"){ const cid=t.value; document.getElementById("ds-disc").innerHTML=discOptions(cid,""); }
-  else if(act==="j-concurso-change"){ const cid=t.value; document.getElementById("j-disc").innerHTML=discOptions(cid,""); }
-  else if(act==="l-concurso-change"){ const cid=t.value; document.getElementById("l-disc").innerHTML=discOptions(cid,""); }
-  else if(act==="cad-concurso-change"){ const cid=t.value; document.getElementById("cad-disc").innerHTML=discOptions(cid,""); }
-  else if(act==="fc-concurso-change"){ const cid=t.value; document.getElementById("fc-disc").innerHTML=discOptions(cid,""); }
+  else if(act==="tm-concurso-change"){ document.getElementById("tm-disc").innerHTML=discOptions(t.value,""); document.getElementById("tm-assunto").innerHTML=assuntoOptions(t.value,"",""); }
+  else if(act==="tm-disc-change"){ const cid=document.getElementById("tm-concurso").value; document.getElementById("tm-assunto").innerHTML=assuntoOptions(cid,t.value,""); }
+  else if(act==="q-concurso-change"||act==="eq-concurso-change"){ const did=act==="eq-concurso-change"?"eq-disc-"+t.dataset.id:"q-disc"; const aid=act==="eq-concurso-change"?"eq-assunto-"+t.dataset.id:"q-assunto"; document.getElementById(did).innerHTML=discOptions(t.value,""); document.getElementById(aid).innerHTML=assuntoOptions(t.value,"",""); }
+  else if(act==="q-disc-change"){ const cid=document.getElementById("q-concurso").value; document.getElementById("q-assunto").innerHTML=assuntoOptions(cid,t.value,""); }
+  else if(act==="sm-concurso-change"||act==="esm-concurso-change"){ const did=act==="esm-concurso-change"?"esm-disc-"+t.dataset.id:"sm-disc"; const aid=act==="esm-concurso-change"?"esm-assunto-"+t.dataset.id:"sm-assunto"; document.getElementById(did).innerHTML=discOptions(t.value,""); document.getElementById(aid).innerHTML=assuntoOptions(t.value,"",""); }
+  else if(act==="ds-concurso-change"||act==="eds-concurso-change"){ const did=act==="eds-concurso-change"?"eds-disc-"+t.dataset.id:"ds-disc"; const aid=act==="eds-concurso-change"?"eds-assunto-"+t.dataset.id:"ds-assunto"; document.getElementById(did).innerHTML=discOptions(t.value,""); document.getElementById(aid).innerHTML=assuntoOptions(t.value,"",""); }
+  else if(act==="ds-disc-change"){ const cid=document.getElementById("ds-concurso").value; document.getElementById("ds-assunto").innerHTML=assuntoOptions(cid,t.value,""); }
+  else if(act==="j-concurso-change"||act==="ej-concurso-change"){ const did=act==="ej-concurso-change"?"ej-disc-"+t.dataset.id:"j-disc"; document.getElementById(did).innerHTML=discOptions(t.value,""); }
+  else if(act==="l-concurso-change"||act==="el-concurso-change"){ const did=act==="el-concurso-change"?"el-disc-"+t.dataset.id:"l-disc"; document.getElementById(did).innerHTML=discOptions(t.value,""); }
+  else if(act==="cad-concurso-change"){ document.getElementById("cad-disc").innerHTML=discOptions(t.value,""); }
+  else if(act==="fc-concurso-change"||act==="ef-concurso-change"){ const did=act==="ef-concurso-change"?"ef-disc-"+t.dataset.id:"fc-disc"; const aid=act==="ef-concurso-change"?"ef-assunto-"+t.dataset.id:"fc-assunto"; document.getElementById(did).innerHTML=discOptions(t.value,""); document.getElementById(aid).innerHTML=assuntoOptions(t.value,"",""); }
+  else if(act==="fc-disc-change"){ const cid=document.getElementById("fc-concurso").value; document.getElementById("fc-assunto").innerHTML=assuntoOptions(cid,t.value,""); }
+  else if(act==="er-concurso-change"){ document.getElementById("er-disc-"+t.dataset.id).innerHTML=discOptions(t.value,""); document.getElementById("er-assunto-"+t.dataset.id).innerHTML=assuntoOptions(t.value,"",""); }
   else if(act==="fc-filter-change"){ UI.fcFilter=t.value; renderSection(); }
+  else if(act==="toggle-task"){ const mid=t.dataset.mid, tid=t.dataset.tid; mutate(()=>{ const m=S.metas.find(x=>x.id===mid); const task=(m.tasks||[]).find(x=>x.id===tid); if(task) task.done=t.checked; }); }
+  else if(act==="ciclo-prevista"){ const ci=S.ciclo.find(x=>x.id===t.dataset.id); if(ci){ ci.tempoPrevisto=Math.max(1,Number(t.value)||1); ci.status= ci.tempoExecutado<=0?"não iniciado": ci.tempoExecutado>=ci.tempoPrevisto?"concluído":"em andamento"; mutateSilent(()=>{}); renderSection(); } }
+  else if(act==="ciclo-executado"){ const ci=S.ciclo.find(x=>x.id===t.dataset.id); if(ci){ ci.tempoExecutado=Math.max(0,Number(t.value)||0); ci.status= ci.tempoExecutado<=0?"não iniciado": ci.tempoExecutado>=ci.tempoPrevisto?"concluído":"em andamento"; mutateSilent(()=>{}); renderSection(); } }
+  else if(act==="revisao-data"){ const r=S.revisoes.find(x=>x.id===t.dataset.id); if(r){ r.dataPrevista=t.value; mutateSilent(()=>{}); renderSection(); } }
   else if(t.id==="horas-semanais"){ const novo=Math.max(1,Number(t.value)||1); mutate(()=>{ recalcularHoras(novo); }); }
   else if(t.id==="import-file"){ importData(t.files[0]); }
 });
@@ -909,6 +1214,7 @@ document.addEventListener("input",(e)=>{
   const t=e.target.closest("[data-act]"); if(!t) return;
   const act=t.dataset.act;
   if(act==="caderno-texto"){ const c=S.cadernos.find(x=>x.id===t.dataset.id); c.conteudo=t.value; scheduleSave(); }
+  else if(act==="caderno-titulo"){ const c=S.cadernos.find(x=>x.id===t.dataset.id); c.titulo=t.value; scheduleSave(); }
   else if(act==="postit-texto"){ const p=S.postits.find(x=>x.id===t.dataset.id); p.texto=t.value; scheduleSave(); }
   else if(act==="table-cell"){ tableCellInput(t); }
 });
@@ -921,14 +1227,14 @@ function colorPickAction(group,id,color){
 }
 function tableOp(t,op,idx){
   const group=t.dataset.group, id=t.dataset.id;
-  function getTable(){ if(group==="caderno") return S.cadernos.find(x=>x.id===id); if(group==="postit") return S.postits.find(x=>x.id===id); return null; }
   if(group==="fc"){
     let tab=UI.fcTabela; if(!tab) return;
     if(op==="addrow") tab.push(tab[0].map(()=>"")); else if(op==="addcol") tab.forEach(r=>r.push(""));
     else if(op==="delrow"&&tab.length>1) tab.splice(idx,1); else if(op==="delcol"&&tab[0].length>1) tab.forEach(r=>r.splice(idx,1));
     renderSection(); return;
   }
-  const obj=getTable(); if(!obj||!obj.tabela) return;
+  const obj = group==="caderno"? S.cadernos.find(x=>x.id===id) : group==="postit"? S.postits.find(x=>x.id===id) : null;
+  if(!obj||!obj.tabela) return;
   let tab=obj.tabela;
   if(op==="addrow") tab.push(tab[0].map(()=>""));
   else if(op==="addcol") tab.forEach(r=>r.push(""));
@@ -949,15 +1255,10 @@ function stopTimerInterval(){ if(timerInterval){ clearInterval(timerInterval); t
 function stopTimerStop(){
   UI.timerRunning=false; stopTimerInterval();
   if(UI.timerElapsed>=5){
+    const sel={...UI.timerSel};
     mutate(()=>{
-      const sel=UI.timerSel;
       S.registros.push({id:uid(),...sel,duracao:UI.timerElapsed,ts:new Date().toISOString()});
-      const ci=S.ciclo.find(c=>c.disciplinaId===sel.disciplinaId&&c.concursoId===sel.concursoId&&c.status!=="concluído");
-      if(ci){ ci.tempoExecutado=(ci.tempoExecutado||0)+Math.round(UI.timerElapsed/60); ci.status="em andamento"; if(ci.tempoExecutado>=ci.tempoPrevisto) ci.status="concluído"; }
-      if(sel.tipo==="teoria"&&sel.assuntoId){
-        const exists=S.revisoes.find(r=>r.assuntoId===sel.assuntoId&&r.status!=="concluída"&&r.intervaloIdx===0);
-        if(!exists) S.revisoes.push({id:uid(),concursoId:sel.concursoId,disciplinaId:sel.disciplinaId,assuntoId:sel.assuntoId,intervaloIdx:0,dataPrevista:todayISO(REV_INTERVALS[0].d),status:"pendente"});
-      }
+      applyEstudoEffects(sel,UI.timerElapsed);
     });
   } else { renderSection(); }
   UI.timerElapsed=0;
@@ -975,8 +1276,8 @@ function importData(file){
   if(!file) return;
   const reader=new FileReader();
   reader.onload=()=>{
-    try{ const parsed=JSON.parse(reader.result); S=Object.assign(defaultState(),parsed); render(); }
-    catch(e){ alert("Arquivo inválido."); }
+    try{ const parsed=JSON.parse(reader.result); S=Object.assign(defaultState(),parsed); S.metas.forEach(m=>{ if(!m.tasks) m.tasks=[]; if(!m.periodo) m.periodo="semanal"; }); render(); }
+    catch(e){}
   };
   reader.readAsText(file);
 }
